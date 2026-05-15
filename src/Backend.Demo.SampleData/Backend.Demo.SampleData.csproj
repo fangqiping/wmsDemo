@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FlowEngine" Version="0.1.0-preview.1" />
+    <PackageReference Include="FlowEngine.Execution" Version="0.1.0-preview.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Backend.Demo.Contracts\Backend.Demo.Contracts.csproj" />
+  </ItemGroup>
+</Project>
