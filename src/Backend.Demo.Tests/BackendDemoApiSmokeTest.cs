@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Backend.Demo.Contracts.Orders;
 using Backend.Demo.Domain;
 using FlowEngine.Data;
+using FlowEngine.Execution;
 using FlowEngine.Execution.FlowEngine;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -47,6 +48,80 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         var flowTask = await manager.GetByIdAsync<long, FlowTaskDetail>(started.FlowTaskId!.Value);
         Assert.NotNull(flowTask);
+    }
+
+    [Fact]
+    public async Task OutboundOrderStartFlow_ThroughHttp_ProducesFlowTask() {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sku = (await manager.GetAsync<int, Sku>()).First();
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+
+        var createResponse = await _client.PostAsJsonAsync("/api/OutboundOrders", new OutboundOrderModel {
+            Code = "OUT-1001",
+            Destination = "OUT-01",
+            Remark = "Smoke test",
+            Lines = new List<OutboundOrderLineModel> {
+                new() {
+                    SkuId = sku.Id,
+                    Quantity = 1,
+                    SourceLocationId = sourceLocation.Id
+                }
+            }
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var created = await createResponse.Content.ReadFromJsonAsync<OutboundOrderModel>();
+        Assert.NotNull(created);
+
+        var startResponse = await _client.PostAsync($"/api/OutboundOrders/{created!.Id}/start-flow", null);
+        startResponse.EnsureSuccessStatusCode();
+        var started = await startResponse.Content.ReadFromJsonAsync<OutboundOrderModel>();
+        Assert.NotNull(started);
+        Assert.NotNull(started!.FlowTaskId);
+        Assert.NotNull(started.FlowVersionNumber);
+
+        var flowTask = await manager.GetByIdAsync<long, FlowTaskDetail>(started.FlowTaskId!.Value);
+        Assert.NotNull(flowTask);
+    }
+
+    [Fact]
+    public async Task InboundOrderReadById_SyncsStatusFromCompletedFlowTask() {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sku = (await manager.GetAsync<int, Sku>()).First();
+        var targetLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+
+        var createResponse = await _client.PostAsJsonAsync("/api/InboundOrders", new InboundOrderModel {
+            Code = "IN-2001",
+            Source = "IN-01",
+            Lines = new List<InboundOrderLineModel> {
+                new() {
+                    SkuId = sku.Id,
+                    Quantity = 1,
+                    TargetLocationId = targetLocation.Id
+                }
+            }
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var created = await createResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
+        Assert.NotNull(created);
+
+        var startResponse = await _client.PostAsync($"/api/InboundOrders/{created!.Id}/start-flow", null);
+        startResponse.EnsureSuccessStatusCode();
+        var started = await startResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
+        Assert.NotNull(started);
+
+        await manager.UpdateAsync<long, FlowTaskDetail>(started!.FlowTaskId!.Value, entity => {
+            entity.Status = ExecutableStatus.Completed;
+            entity.FinishedTime = DateTimeOffset.UtcNow;
+        });
+
+        var readResponse = await _client.GetAsync($"/api/InboundOrders/{started.Id}");
+        readResponse.EnsureSuccessStatusCode();
+        var refreshed = await readResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
+        Assert.NotNull(refreshed);
+        Assert.Equal((int)Domain.Enums.OrderStatus.Completed, refreshed!.Status);
+        Assert.NotNull(refreshed.CompletedTime);
     }
 
     public Task InitializeAsync() {
