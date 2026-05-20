@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Backend.Demo.DependencyInjection;
 
 public sealed class BackendDemoInitializer : IBackendDemoInitializer {
+    private readonly ILogger<BackendDemoInitializer> _logger;
     private readonly DbContext _dbContext;
     private readonly IManager _manager;
     private readonly IFlowDraftService _flowDraftService;
@@ -16,11 +17,13 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
     private readonly IPublishedFlowProvider _publishedFlowProvider;
 
     public BackendDemoInitializer(
+        ILogger<BackendDemoInitializer> logger,
         DbContext dbContext,
         IManager manager,
         IFlowDraftService flowDraftService,
         IFlowPublisher flowPublisher,
         IPublishedFlowProvider publishedFlowProvider) {
+        _logger = logger;
         _dbContext = dbContext;
         _manager = manager;
         _flowDraftService = flowDraftService;
@@ -29,13 +32,56 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
     }
 
     public async Task InitializeAsync() {
-        await _dbContext.Database.EnsureCreatedAsync();
+        await ResetLegacySqliteDatabaseAsync();
+        await _dbContext.Database.MigrateAsync();
 
         await EnsureMasterDataAsync();
         await EnsureFlowBindingsAsync();
         await EnsureFlowPublishedAsync(BackendDemoFlowSeeds.CreateInboundDraft);
         await EnsureFlowPublishedAsync(BackendDemoFlowSeeds.CreateOutboundDraft);
         await _publishedFlowProvider.RefreshAsync();
+    }
+
+    private async Task ResetLegacySqliteDatabaseAsync() {
+        if (!string.Equals(_dbContext.Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal)) {
+            return;
+        }
+
+        var connection = _dbContext.Database.GetDbConnection();
+        var shouldClose = connection.State != System.Data.ConnectionState.Open;
+        if (shouldClose) {
+            await connection.OpenAsync();
+        }
+
+        try {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                select count(*)
+                from sqlite_master
+                where type = 'table'
+                  and name not like 'sqlite_%'
+                  and name != '__EFMigrationsHistory';
+                """;
+            var userTableCount = Convert.ToInt64(await command.ExecuteScalarAsync() ?? 0L);
+
+            await using var historyCommand = connection.CreateCommand();
+            historyCommand.CommandText = """
+                select count(*)
+                from sqlite_master
+                where type = 'table'
+                  and name = '__EFMigrationsHistory';
+                """;
+            var migrationHistoryCount = Convert.ToInt64(await historyCommand.ExecuteScalarAsync() ?? 0L);
+
+            if (userTableCount > 0 && migrationHistoryCount == 0) {
+                _logger.LogWarning("Detected legacy SQLite database created without EF migrations. Recreating demo database.");
+                await _dbContext.Database.EnsureDeletedAsync();
+            }
+        } finally {
+            if (shouldClose) {
+                await connection.CloseAsync();
+            }
+        }
     }
 
     private async Task EnsureMasterDataAsync() {

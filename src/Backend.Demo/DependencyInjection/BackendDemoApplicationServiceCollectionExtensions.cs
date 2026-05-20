@@ -9,6 +9,7 @@ using Backend.Demo.Application;
 using Backend.Demo.Watchers;
 using FlowEngine.Data.DependencyInjection;
 using FlowEngine.Data.EntityFramework.Storage.DependencyInjection;
+using FlowEngine.Utils.DependencyInjection;
 
 namespace Backend.Demo.DependencyInjection;
 
@@ -16,7 +17,11 @@ public static class BackendDemoApplicationServiceCollectionExtensions {
     public static IServiceCollection AddBackendDemoApplication(this IServiceCollection services, string connectionString) {
         services.AddBackendDemoData(connectionString);
         services.AddExecution(typeof(BackendDemoApplicationServiceCollectionExtensions).Assembly);
-        services.AddWatchers(new[] { typeof(FlowTaskOrderStatusWatcher) });
+        services.AddWatchers(new[] {
+            typeof(FlowTaskOrderStatusWatcher),
+            typeof(InboundOrderFlowTaskLinkWatcher),
+            typeof(OutboundOrderFlowTaskLinkWatcher),
+        });
         services.AddEntities(
             typeof(ConsoleInfo),
             typeof(OperationTaskDetail),
@@ -30,6 +35,7 @@ public static class BackendDemoApplicationServiceCollectionExtensions {
         services.AddConsole<StackCraneConsole>();
         services.AddApiControllers(typeof(BackendDemoApplicationServiceCollectionExtensions).Assembly);
         services.AddExecutionControllers();
+        services.AddSingletonHostedService<OrderStatusReconciliationService>();
         services.AddScoped<IOrderFlowService, OrderFlowService>();
         services.AddScoped<IBackendDemoInitializer, BackendDemoInitializer>();
         return services;

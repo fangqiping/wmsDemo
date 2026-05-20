@@ -14,7 +14,7 @@ public sealed class ConveyorTransferOperationTask : OperationTask<ConveyorConsol
     public string ToLocationCode { get; set; } = string.Empty;
 
     [Input]
-    public int DelayMilliseconds { get; set; } = 250;
+    public int DelayMilliseconds { get; set; } = 30000;
 
     [Output]
     public string CompletionMessage { get; set; } = string.Empty;

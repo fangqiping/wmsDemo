@@ -14,7 +14,7 @@ public sealed class StackCraneStoreOperationTask : OperationTask<StackCraneConso
     public string TargetLocationCode { get; set; } = string.Empty;
 
     [Input]
-    public int DelayMilliseconds { get; set; } = 400;
+    public int DelayMilliseconds { get; set; } = 20000;
 
     [Output]
     public string CompletionMessage { get; set; } = string.Empty;

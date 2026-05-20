@@ -11,6 +11,7 @@ public static class BackendDemoDataServiceCollectionExtensions {
         services.AddDataDbContext(
             Providers.SQLITE,
             connectionString,
+            migrationAssembly: typeof(BackendDemoDataServiceCollectionExtensions).Assembly.GetName().Name,
             discoveryAssembly: typeof(BackendDemoDataServiceCollectionExtensions).Assembly);
 
         services.AddDataCore(new[] {

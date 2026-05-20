@@ -4,6 +4,8 @@ using Backend.Demo.Contracts.Orders;
 using Backend.Demo.Domain;
 using Backend.Demo.Domain.Enums;
 using FlowEngine.Data;
+using FlowEngine.Execution;
+using FlowEngine.Execution.FlowEngine;
 using FlowApiController = FlowEngine.Server.WebApi.ApiController<int, Backend.Demo.Domain.InboundOrder, Backend.Demo.Contracts.Orders.InboundOrderModel, Backend.Demo.Contracts.Orders.InboundOrderModel>;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,14 +18,17 @@ public sealed class InboundOrdersController : FlowApiController {
     private static readonly Func<IQueryable<InboundOrder>, IQueryable<InboundOrder>> INCLUDE =
         orders => orders.Include(entity => entity.Lines);
 
+    private readonly IManager _rootManager;
     private readonly IOrderFlowService _orderFlowService;
 
     public InboundOrdersController(
         ILogger<InboundOrdersController> logger,
         IManager<int, InboundOrder> manager,
+        IManager rootManager,
         IMapper mapper,
         IOrderFlowService orderFlowService)
         : base(logger, manager, mapper, INCLUDE) {
+        _rootManager = rootManager;
         _orderFlowService = orderFlowService;
     }
 
@@ -72,6 +77,37 @@ public sealed class InboundOrdersController : FlowApiController {
             entity.Status = input.Status == default ? OrderStatus.Draft : (OrderStatus)input.Status;
         }
         return entity;
+    }
+
+    protected override InboundOrderModel ToOutput(InboundOrder entity) {
+        var model = base.ToOutput(entity);
+        if (!entity.FlowTaskId.HasValue || model.Status != (int)OrderStatus.Running) {
+            return model;
+        }
+
+        var flowTaskDetail = _rootManager.GetByIdAsync<long, FlowTaskDetail>(entity.FlowTaskId.Value)
+            .ConfigureAwait(false)
+            .GetAwaiter()
+            .GetResult();
+        if (flowTaskDetail == null) {
+            return model;
+        }
+
+        if (flowTaskDetail.Status is ExecutableStatus.Completed or ExecutableStatus.Failed or ExecutableStatus.Canceled) {
+            model.Status = (int)MapStatus(flowTaskDetail.Status);
+            model.CompletedTime = flowTaskDetail.FinishedTime;
+        }
+
+        return model;
+    }
+
+    private static OrderStatus MapStatus(ExecutableStatus status) {
+        return status switch {
+            ExecutableStatus.Completed => OrderStatus.Completed,
+            ExecutableStatus.Failed => OrderStatus.Failed,
+            ExecutableStatus.Canceled => OrderStatus.Canceled,
+            _ => OrderStatus.Running,
+        };
     }
 
     public sealed class InboundOrderModelProfile : Profile {

@@ -3,6 +3,7 @@ using Backend.Demo.Domain.Enums;
 using FlowEngine.Data;
 using FlowEngine.Execution;
 using FlowEngine.Execution.Design;
+using FlowEngine.Execution.FlowEngine;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.Demo.Application;
@@ -47,6 +48,7 @@ public sealed class OrderFlowService : IOrderFlowService {
             entity.Status = OrderStatus.Running;
             entity.UpdatedTime = DateTimeOffset.UtcNow;
         });
+        order = await SyncTerminalInboundOrderStatusAsync(order);
         return order;
     }
 
@@ -79,7 +81,42 @@ public sealed class OrderFlowService : IOrderFlowService {
             entity.Status = OrderStatus.Running;
             entity.UpdatedTime = DateTimeOffset.UtcNow;
         });
+        order = await SyncTerminalOutboundOrderStatusAsync(order);
         return order;
+    }
+
+    private async Task<InboundOrder> SyncTerminalInboundOrderStatusAsync(InboundOrder order) {
+        if (!order.FlowTaskId.HasValue) {
+            return order;
+        }
+
+        var flowTaskDetail = await _manager.GetByIdAsync<long, FlowTaskDetail>(order.FlowTaskId.Value);
+        if (flowTaskDetail == null || !IsTerminal(flowTaskDetail.Status)) {
+            return order;
+        }
+
+        return await _manager.UpdateAsync<int, InboundOrder>(order.Id, entity => {
+            entity.Status = MapOrderStatus(flowTaskDetail.Status);
+            entity.UpdatedTime = DateTimeOffset.UtcNow;
+            entity.CompletedTime = flowTaskDetail.FinishedTime;
+        });
+    }
+
+    private async Task<OutboundOrder> SyncTerminalOutboundOrderStatusAsync(OutboundOrder order) {
+        if (!order.FlowTaskId.HasValue) {
+            return order;
+        }
+
+        var flowTaskDetail = await _manager.GetByIdAsync<long, FlowTaskDetail>(order.FlowTaskId.Value);
+        if (flowTaskDetail == null || !IsTerminal(flowTaskDetail.Status)) {
+            return order;
+        }
+
+        return await _manager.UpdateAsync<int, OutboundOrder>(order.Id, entity => {
+            entity.Status = MapOrderStatus(flowTaskDetail.Status);
+            entity.UpdatedTime = DateTimeOffset.UtcNow;
+            entity.CompletedTime = flowTaskDetail.FinishedTime;
+        });
     }
 
     private async Task<(FlowDefinition definition, FlowVersion version, IFlow flow)> ResolveFlowAsync(
@@ -105,5 +142,18 @@ public sealed class OrderFlowService : IOrderFlowService {
         var flow = await _flowManager.GetByIdAsync(version.RuntimeFlowId)
             ?? throw new ArgumentException($"Runtime flow {version.RuntimeFlowId} not found.");
         return (definition, version, flow);
+    }
+
+    private static bool IsTerminal(ExecutableStatus status) {
+        return status is ExecutableStatus.Completed or ExecutableStatus.Failed or ExecutableStatus.Canceled;
+    }
+
+    private static OrderStatus MapOrderStatus(ExecutableStatus status) {
+        return status switch {
+            ExecutableStatus.Completed => OrderStatus.Completed,
+            ExecutableStatus.Failed => OrderStatus.Failed,
+            ExecutableStatus.Canceled => OrderStatus.Canceled,
+            _ => OrderStatus.Running,
+        };
     }
 }
