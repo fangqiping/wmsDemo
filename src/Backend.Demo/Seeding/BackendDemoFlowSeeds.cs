@@ -1,5 +1,8 @@
 using System.Text.Json;
+using Backend.Demo.Domain;
 using FlowEngine.Execution.Design;
+using FlowEngine.Execution.Consoles;
+using FlowEngine.Execution.Resource;
 
 namespace Backend.Demo.Seeding;
 
@@ -36,10 +39,22 @@ internal static class BackendDemoFlowSeeds {
                 Variable("OrderCode", "string", "input", string.Empty),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
                 Variable("TargetLocationCode", "string", "input", string.Empty),
+                Variable("TargetLocationId", "int", "input", 0),
                 Variable("SkuCode", "string", "input", string.Empty),
                 Variable("Status", "string", "output", "Draft")
             },
             nodes = new object[] {
+                Operation(
+                    id: "AcquireTargetLocation",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(IdAcquireResourceTask<int, Location>).FullName!,
+                    inputs: new object[] {
+                        Input("TargetLocationId", nameof(IdAcquireResourceTask<int, Location>.ResourceId))
+                    },
+                    outputs: Array.Empty<object>(),
+                    resourceOutputs: new object[] {
+                        ResourceOutput(nameof(IdAcquireResourceTask<int, Location>.ResourceId), typeof(Location).FullName!)
+                    }),
                 Operation(
                     id: "Receive",
                     consoleId: ConveyorConsole.NAME,
@@ -57,14 +72,16 @@ internal static class BackendDemoFlowSeeds {
                     inputs: new object[] {
                         Input("OrderCode", nameof(StackCraneStoreOperationTask.OrderCode)),
                         Input("SkuCode", nameof(StackCraneStoreOperationTask.SkuCode)),
-                        Input("TargetLocationCode", nameof(StackCraneStoreOperationTask.TargetLocationCode))
+                        Input("TargetLocationCode", nameof(StackCraneStoreOperationTask.TargetLocationCode)),
+                        Input("TargetLocationId", nameof(StackCraneStoreOperationTask.TargetLocationId))
                     },
                     outputs: new object[] {
                         Output(nameof(StackCraneStoreOperationTask.CompletionMessage), "Status")
                     })
             },
             routes = new object[] {
-                Path("Root", new[] { "Receive" }),
+                Path("Root", new[] { "AcquireTargetLocation" }),
+                Path("AcquireTargetLocation", new[] { "Receive" }),
                 Path("Receive", new[] { "Store" })
             }
         });
@@ -76,11 +93,23 @@ internal static class BackendDemoFlowSeeds {
             variables = new object[] {
                 Variable("OrderCode", "string", "input", string.Empty),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
+                Variable("SourceLocationId", "int", "input", 0),
                 Variable("TargetLocationCode", "string", "input", string.Empty),
                 Variable("SkuCode", "string", "input", string.Empty),
                 Variable("Status", "string", "output", "Draft")
             },
             nodes = new object[] {
+                Operation(
+                    id: "AcquireSourceLocation",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(IdAcquireResourceTask<int, Location>).FullName!,
+                    inputs: new object[] {
+                        Input("SourceLocationId", nameof(IdAcquireResourceTask<int, Location>.ResourceId))
+                    },
+                    outputs: Array.Empty<object>(),
+                    resourceOutputs: new object[] {
+                        ResourceOutput(nameof(IdAcquireResourceTask<int, Location>.ResourceId), typeof(Location).FullName!)
+                    }),
                 Operation(
                     id: "Retrieve",
                     consoleId: StackCraneConsole.NAME,
@@ -88,7 +117,8 @@ internal static class BackendDemoFlowSeeds {
                     inputs: new object[] {
                         Input("OrderCode", nameof(StackCraneRetrieveOperationTask.OrderCode)),
                         Input("SkuCode", nameof(StackCraneRetrieveOperationTask.SkuCode)),
-                        Input("SourceLocationCode", nameof(StackCraneRetrieveOperationTask.SourceLocationCode))
+                        Input("SourceLocationCode", nameof(StackCraneRetrieveOperationTask.SourceLocationCode)),
+                        Input("SourceLocationId", nameof(StackCraneRetrieveOperationTask.SourceLocationId))
                     },
                     outputs: Array.Empty<object>()),
                 Operation(
@@ -105,7 +135,8 @@ internal static class BackendDemoFlowSeeds {
                     })
             },
             routes = new object[] {
-                Path("Root", new[] { "Retrieve" }),
+                Path("Root", new[] { "AcquireSourceLocation" }),
+                Path("AcquireSourceLocation", new[] { "Retrieve" }),
                 Path("Retrieve", new[] { "Deliver" })
             }
         });
@@ -118,7 +149,7 @@ internal static class BackendDemoFlowSeeds {
         initialValue
     };
 
-    private static object Operation(string id, string consoleId, string operationTaskType, object[] inputs, object[] outputs) => new {
+    private static object Operation(string id, string consoleId, string operationTaskType, object[] inputs, object[] outputs, object[]? resourceOutputs = null) => new {
         id,
         nodeType = "Operation",
         description = id,
@@ -126,7 +157,7 @@ internal static class BackendDemoFlowSeeds {
         shouldThrowOnCanceled = false,
         inputs,
         outputs,
-        resourceOutputs = Array.Empty<object>(),
+        resourceOutputs = resourceOutputs ?? Array.Empty<object>(),
         consoleId,
         operationTaskType
     };
@@ -139,6 +170,11 @@ internal static class BackendDemoFlowSeeds {
     private static object Output(string source, string destination) => new {
         source,
         destination
+    };
+
+    private static object ResourceOutput(string source, string resourceType) => new {
+        source,
+        resourceType
     };
 
     private static object Path(string source, string[] targets) => new {

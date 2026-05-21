@@ -1,4 +1,5 @@
 using System.Threading;
+using Backend.Demo.Domain.Enums;
 using FlowEngine.Execution.Consoles;
 
 namespace Backend.Demo;
@@ -16,6 +17,9 @@ public sealed class StackCraneStoreOperationTask : OperationTask<StackCraneConso
     public string TargetLocationCode { get; set; } = string.Empty;
 
     [Input]
+    public int TargetLocationId { get; set; }
+
+    [Input]
     public int DelayMilliseconds { get; set; } = DefaultDelayMilliseconds;
 
     [Output]
@@ -23,6 +27,7 @@ public sealed class StackCraneStoreOperationTask : OperationTask<StackCraneConso
 
     protected override async Task DoProcessAsync(StackCraneConsole console, CancellationToken cancellationToken) {
         await Task.Delay(DelayMilliseconds, cancellationToken);
+        await console.UpdateLocationStatusAsync(TargetLocationId, LocationStatus.Occupied);
         CompletionMessage = $"{OrderCode}: stack crane stored {SkuCode} to {TargetLocationCode}.";
     }
 }

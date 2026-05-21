@@ -3,11 +3,14 @@ using System.Text.Json;
 using Microsoft.Net.Http.Headers;
 using Backend.Demo.Contracts.Orders;
 using Backend.Demo.Domain;
+using Backend.Demo.Domain.Enums;
 using FlowEngine.Data;
 using FlowEngine.Execution;
+using FlowEngine.Execution.Consoles;
 using FlowEngine.Execution.FlowEngine;
 using FlowEngine.Server.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -237,13 +240,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{operationTaskId}", null);
         cancelResponse.EnsureSuccessStatusCode();
 
-        var flowTaskResponse = await _client.GetAsync($"/api/FlowTask/{flowTaskId}");
-        flowTaskResponse.EnsureSuccessStatusCode();
-        using var document = JsonDocument.Parse(await flowTaskResponse.Content.ReadAsStringAsync());
-        var canceledNode = document.RootElement.GetProperty("executableDetailModels")
-            .EnumerateArray()
-            .Single(node => node.GetProperty("id").GetInt64() == operationTaskId);
-
+        var canceledNode = await WaitForExecutableActionAsync(flowTaskId, operationTaskId, "restart");
         Assert.Equal(8, canceledNode.GetProperty("status").GetInt32());
         var actions = canceledNode.GetProperty("availableActions").EnumerateArray().Select(item => item.GetString()).ToArray();
         Assert.Contains("restart", actions);
@@ -259,6 +256,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{operationTaskId}", null);
         cancelResponse.EnsureSuccessStatusCode();
+        await WaitForExecutableActionAsync(flowTaskId, operationTaskId, "restart");
 
         var restartResponse = await _client.PostAsync($"/api/OperationTask/Restart/{operationTaskId}", null);
         restartResponse.EnsureSuccessStatusCode();
@@ -284,6 +282,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{operationTaskId}", null);
         cancelResponse.EnsureSuccessStatusCode();
+        await WaitForExecutableActionAsync(flowTaskId, operationTaskId, "skip");
 
         var skipResponse = await _client.PostAsync($"/api/OperationTask/Skip/{operationTaskId}", null);
         skipResponse.EnsureSuccessStatusCode();
@@ -324,6 +323,49 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
             .Select(item => item.GetString())
             .ToArray();
         Assert.Empty(actions);
+    }
+
+    [Fact]
+    public async Task InboundFlow_AcquiresTargetLocationDuringRun_AndReleasesItAsOccupied() {
+        using var _ = UseObservableResourceOperationTaskDelays();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var targetLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-RESOURCE-1001");
+
+        using (var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, targetLocation.Id)) {
+            Assert.Equal(3, runningFlowDocument.RootElement.GetProperty("status").GetInt32());
+        }
+
+        using (var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4)) {
+            Assert.Equal(4, flowTaskDocument.RootElement.GetProperty("status").GetInt32());
+        }
+
+        var completedLocation = await WaitForLocationStateAsync(targetLocation.Id, acquired: false);
+        Assert.Equal(LocationStatus.Occupied, completedLocation.Status);
+    }
+
+    [Fact]
+    public async Task OutboundFlow_AcquiresSourceLocationDuringRun_AndReleasesItAsEmpty() {
+        using var _ = UseObservableResourceOperationTaskDelays();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+        await manager.UpdateAsync<int, Location>(sourceLocation.Id, entity => entity.Status = LocationStatus.Occupied);
+
+        var flowTaskId = await CreateAndStartOutboundOrderAsync("OUT-RESOURCE-1001");
+
+        using (var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, sourceLocation.Id)) {
+            Assert.Equal(3, runningFlowDocument.RootElement.GetProperty("status").GetInt32());
+        }
+
+        using (var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4)) {
+            Assert.Equal(4, flowTaskDocument.RootElement.GetProperty("status").GetInt32());
+        }
+
+        var completedLocation = await WaitForLocationStateAsync(sourceLocation.Id, acquired: false);
+        Assert.Equal(LocationStatus.Empty, completedLocation.Status);
     }
 
     [Fact]
@@ -388,6 +430,20 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         });
     }
 
+    private IDisposable UseObservableResourceOperationTaskDelays() {
+        var originalConveyorDelay = ConveyorTransferOperationTask.DefaultDelayMilliseconds;
+        var originalStoreDelay = StackCraneStoreOperationTask.DefaultDelayMilliseconds;
+        var originalRetrieveDelay = StackCraneRetrieveOperationTask.DefaultDelayMilliseconds;
+        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 1000;
+        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 1000;
+        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 1000;
+        return new CallbackDisposable(() => {
+            ConveyorTransferOperationTask.DefaultDelayMilliseconds = originalConveyorDelay;
+            StackCraneStoreOperationTask.DefaultDelayMilliseconds = originalStoreDelay;
+            StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = originalRetrieveDelay;
+        });
+    }
+
     private async Task<long> CreateAndStartInboundOrderAsync(string code) {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
@@ -412,6 +468,35 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var startResponse = await _client.PostAsync($"/api/InboundOrders/{created!.Id}/start-flow", null);
         startResponse.EnsureSuccessStatusCode();
         var started = await startResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
+        Assert.NotNull(started);
+        Assert.NotNull(started!.FlowTaskId);
+        return started.FlowTaskId.Value;
+    }
+
+    private async Task<long> CreateAndStartOutboundOrderAsync(string code) {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sku = (await manager.GetAsync<int, Sku>()).First();
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+
+        var createResponse = await _client.PostAsJsonAsync("/api/OutboundOrders", new OutboundOrderModel {
+            Code = code,
+            Destination = "OUT-01",
+            Lines = new List<OutboundOrderLineModel> {
+                new() {
+                    SkuId = sku.Id,
+                    Quantity = 1,
+                    SourceLocationId = sourceLocation.Id
+                }
+            }
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var created = await createResponse.Content.ReadFromJsonAsync<OutboundOrderModel>();
+        Assert.NotNull(created);
+
+        var startResponse = await _client.PostAsync($"/api/OutboundOrders/{created!.Id}/start-flow", null);
+        startResponse.EnsureSuccessStatusCode();
+        var started = await startResponse.Content.ReadFromJsonAsync<OutboundOrderModel>();
         Assert.NotNull(started);
         Assert.NotNull(started!.FlowTaskId);
         return started.FlowTaskId.Value;
@@ -450,6 +535,19 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         throw new Xunit.Sdk.XunitException($"Timed out waiting for replacement operation task for flow {flowTaskId}.");
     }
 
+    private async Task<JsonElement> WaitForExecutableActionAsync(long flowTaskId, long executableId, string expectedAction) {
+        for (var retry = 0; retry < 120; retry++) {
+            var node = await GetExecutableNodeAsync(flowTaskId, executableId);
+            if (node.GetProperty("availableActions").EnumerateArray().Any(action => action.GetString() == expectedAction)) {
+                return node;
+            }
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"Timed out waiting for executable {executableId} in flow {flowTaskId} to expose action '{expectedAction}'.");
+    }
+
     private async Task<JsonElement> GetExecutableNodeAsync(long flowTaskId, long executableId) {
         using var document = await GetFlowTaskDocumentAsync(flowTaskId);
         return document.RootElement.GetProperty("executableDetailModels")
@@ -473,6 +571,21 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} root status {rootStatus} and executable count {expectedExecutableCountAtLeast}.");
     }
 
+    private async Task<JsonDocument> WaitForFlowTaskResourceAsync(long flowTaskId, int resourceId) {
+        for (var retry = 0; retry < 120; retry++) {
+            var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            if (document.RootElement.GetProperty("resourceDetails")
+                .EnumerateArray()
+                .Any(item => item.GetProperty("resourceId").GetString() == resourceId.ToString())) {
+                return document;
+            }
+            document.Dispose();
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} to acquire resource {resourceId}.");
+    }
+
     private async Task<JsonDocument> GetFlowTaskDocumentAsync(long flowTaskId) {
         var response = await _client.GetAsync($"/api/FlowTask/{flowTaskId}");
         response.EnsureSuccessStatusCode();
@@ -480,7 +593,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonDocument> WaitForFlowTaskActionsAsync(long flowTaskId, string expectedAction) {
-        for (var retry = 0; retry < 60; retry++) {
+        for (var retry = 0; retry < 120; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
             if (document.RootElement.GetProperty("availableActions")
                 .EnumerateArray()
@@ -495,8 +608,10 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonDocument> WaitForFlowTaskStatusAsync(long flowTaskId, int expectedStatus) {
-        for (var retry = 0; retry < 60; retry++) {
+        string? lastPayload = null;
+        for (var retry = 0; retry < 120; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            lastPayload = document.RootElement.GetRawText();
             if (document.RootElement.GetProperty("status").GetInt32() == expectedStatus) {
                 return document;
             }
@@ -504,7 +619,40 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
             await Task.Delay(50);
         }
 
-        throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} status {expectedStatus}.");
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<DbContext>();
+        var operationTaskRows = await dbContext.Set<OperationTaskDetail>()
+            .AsNoTracking()
+            .Where(item => item.ParentFlowTaskId == flowTaskId)
+            .OrderBy(item => item.Id)
+            .Select(item => new {
+                item.Id,
+                item.NodeId,
+                item.Status,
+                item.Acknowledged,
+                item.ErrorMessage
+            })
+            .ToListAsync();
+
+        throw new Xunit.Sdk.XunitException(
+            $"Timed out waiting for flow {flowTaskId} status {expectedStatus}. Last payload: {lastPayload}. OperationTask rows: {JsonSerializer.Serialize(operationTaskRows)}");
+    }
+
+    private async Task<Location> WaitForLocationStateAsync(int locationId, bool acquired) {
+        Location? lastLocation = null;
+        for (var retry = 0; retry < 120; retry++) {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+            var location = await manager.GetByIdAsync<int, Location>(locationId);
+            lastLocation = location;
+            if (location?.Acquired == acquired) {
+                return location;
+            }
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"Timed out waiting for location {locationId} acquired={acquired}. Last location: {JsonSerializer.Serialize(lastLocation)}");
     }
 
     private sealed class CallbackDisposable : IDisposable {

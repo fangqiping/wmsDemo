@@ -98,19 +98,28 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
         await transaction.AddAsync<int, Location>(new Location {
             Code = "IN-01",
             Name = "Inbound Station 01",
+            Enabled = true,
+            Acquired = false,
             LocationType = LocationType.InboundStation,
+            Status = LocationStatus.Available,
             WarehouseId = warehouse.Id
         });
         await transaction.AddAsync<int, Location>(new Location {
             Code = "RACK-A1",
             Name = "Rack A1",
+            Enabled = true,
+            Acquired = false,
             LocationType = LocationType.Rack,
+            Status = LocationStatus.Empty,
             WarehouseId = warehouse.Id
         });
         await transaction.AddAsync<int, Location>(new Location {
             Code = "OUT-01",
             Name = "Outbound Station 01",
+            Enabled = true,
+            Acquired = false,
             LocationType = LocationType.OutboundStation,
+            Status = LocationStatus.Available,
             WarehouseId = warehouse.Id
         });
 

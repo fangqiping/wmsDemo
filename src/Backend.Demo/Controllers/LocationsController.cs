@@ -18,9 +18,11 @@ public sealed class LocationsController : FlowApiController {
     public sealed class LocationModelProfile : Profile {
         public LocationModelProfile() {
             CreateMap<LocationModel, Location>()
-                .ForMember(entity => entity.LocationType, opt => opt.MapFrom(model => (LocationType)model.LocationType));
+                .ForMember(entity => entity.LocationType, opt => opt.MapFrom(model => (LocationType)model.LocationType))
+                .ForMember(entity => entity.Status, opt => opt.MapFrom(model => (LocationStatus)model.Status));
             CreateMap<Location, LocationModel>()
-                .ForMember(model => model.LocationType, opt => opt.MapFrom(entity => (int)entity.LocationType));
+                .ForMember(model => model.LocationType, opt => opt.MapFrom(entity => (int)entity.LocationType))
+                .ForMember(model => model.Status, opt => opt.MapFrom(entity => (int)entity.Status));
         }
     }
 }

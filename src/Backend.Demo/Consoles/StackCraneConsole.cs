@@ -1,4 +1,6 @@
 using FlowEngine.Data;
+using Backend.Demo.Domain;
+using Backend.Demo.Domain.Enums;
 using FlowEngine.Execution;
 using FlowEngine.Execution.Consoles;
 using FlowEngine.Execution.Events;
@@ -9,9 +11,11 @@ namespace Backend.Demo;
 
 public sealed class StackCraneConsole : ConsoleBase {
     public const string NAME = "StackCraneConsole";
+    private readonly IManagerFactory<int, Location> _locationManagerFactory;
 
     public StackCraneConsole(
         ILogger<StackCraneConsole> logger,
+        IManagerFactory<int, Location> locationManagerFactory,
         IManagerFactory<string, ConsoleInfo> managerFactory,
         IOperationTaskStore taskStore,
         IExecutableEventProducer executableEventProducer,
@@ -26,5 +30,11 @@ public sealed class StackCraneConsole : ConsoleBase {
             taskStore,
             executableEventProducer,
             notifier) {
+        _locationManagerFactory = locationManagerFactory;
+    }
+
+    public async Task UpdateLocationStatusAsync(int locationId, LocationStatus status) {
+        using var scopedManager = _locationManagerFactory.Create();
+        await scopedManager.Service.UpdateAsync(locationId, location => location.Status = status);
     }
 }

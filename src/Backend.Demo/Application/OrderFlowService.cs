@@ -37,6 +37,7 @@ public sealed class OrderFlowService : IOrderFlowService {
             .WithInput(order.Code, "OrderCode")
             .WithInput(order.Source, "SourceLocationCode")
             .WithInput(targetLocation.Code, "TargetLocationCode")
+            .WithInput(targetLocation.Id, "TargetLocationId")
             .WithInput(sku.Code, "SkuCode")
             .Build();
 
@@ -69,6 +70,7 @@ public sealed class OrderFlowService : IOrderFlowService {
         var options = new ExecutionOptions.Builder(flow)
             .WithInput(order.Code, "OrderCode")
             .WithInput(sourceLocation.Code, "SourceLocationCode")
+            .WithInput(sourceLocation.Id, "SourceLocationId")
             .WithInput(order.Destination, "TargetLocationCode")
             .WithInput(sku.Code, "SkuCode")
             .Build();
