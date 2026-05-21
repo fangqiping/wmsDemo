@@ -25,6 +25,8 @@ If your `FlowEngine` checkout lives elsewhere, set `FLOWENGINE_REPO` before runn
 
 ## Quick Start
 
+### macOS / Linux
+
 1. Build local `FlowEngine` preview packages:
 
 ```bash
@@ -34,6 +36,44 @@ If your `FlowEngine` checkout lives elsewhere, set `FLOWENGINE_REPO` before runn
 2. Restore and run the backend:
 
 ```bash
+dotnet restore
+dotnet run --project src/Backend.Demo --urls http://127.0.0.1:5086
+```
+
+3. Open Swagger:
+
+```text
+http://127.0.0.1:5086/swagger
+```
+
+If your `FlowEngine` checkout is not a sibling folder named `FlowEngine`, export the path before packing:
+
+```bash
+export FLOWENGINE_REPO=/absolute/path/to/FlowEngine
+./scripts/pack-flowengine-preview.sh
+```
+
+### Windows PowerShell
+
+1. Build local `FlowEngine` preview packages:
+
+```powershell
+$env:FLOWENGINE_REPO = "C:\path\to\FlowEngine" # optional when FlowEngine is not next to Backend
+bash ./scripts/pack-flowengine-preview.sh
+```
+
+If `bash` is not available, run the equivalent `dotnet pack` commands manually:
+
+```powershell
+dotnet pack ..\FlowEngine\src\FlowEngine\src\FlowEngine.csproj --no-restore -c Release -o .\.nupkg\flowengine
+dotnet pack ..\FlowEngine\src\FlowEngine.Execution\src\FlowEngine.Execution.csproj --no-restore -c Release -o .\.nupkg\flowengine
+dotnet pack ..\FlowEngine\src\FlowEngine.Execution.Equipment\src\FlowEngine.Execution.Equipment.csproj --no-restore -c Release -o .\.nupkg\flowengine
+dotnet pack ..\FlowEngine\src\FlowEngine.Server\src\FlowEngine.Server.csproj --no-restore -c Release -o .\.nupkg\flowengine
+```
+
+2. Restore and run the backend:
+
+```powershell
 dotnet restore
 dotnet run --project src/Backend.Demo --urls http://127.0.0.1:5086
 ```

@@ -302,6 +302,31 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
+    public async Task RootFlowCancel_ThroughHttp_CancelsFlowAndClearsActions() {
+        using var _ = UseExtendedOperationTaskDelays();
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-FLOW-CANCEL-1001");
+
+        using (var startedFlowDocument = await WaitForFlowTaskActionsAsync(flowTaskId, "cancel")) {
+            var rootActions = startedFlowDocument.RootElement.GetProperty("availableActions")
+                .EnumerateArray()
+                .Select(item => item.GetString())
+                .ToArray();
+            Assert.Contains("cancel", rootActions);
+        }
+
+        var cancelResponse = await _client.PostAsync($"/api/FlowTask/Cancel/{flowTaskId}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+
+        using var canceledFlowDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 8);
+        Assert.Equal(8, canceledFlowDocument.RootElement.GetProperty("status").GetInt32());
+        var actions = canceledFlowDocument.RootElement.GetProperty("availableActions")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Empty(actions);
+    }
+
+    [Fact]
     public async Task InboundOrderStartFlow_EventuallyMarksOrderCompleted_WhenTaskFinishesQuickly() {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
@@ -452,6 +477,34 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var response = await _client.GetAsync($"/api/FlowTask/{flowTaskId}");
         response.EnsureSuccessStatusCode();
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    }
+
+    private async Task<JsonDocument> WaitForFlowTaskActionsAsync(long flowTaskId, string expectedAction) {
+        for (var retry = 0; retry < 60; retry++) {
+            var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            if (document.RootElement.GetProperty("availableActions")
+                .EnumerateArray()
+                .Any(action => action.GetString() == expectedAction)) {
+                return document;
+            }
+            document.Dispose();
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} action '{expectedAction}'.");
+    }
+
+    private async Task<JsonDocument> WaitForFlowTaskStatusAsync(long flowTaskId, int expectedStatus) {
+        for (var retry = 0; retry < 60; retry++) {
+            var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            if (document.RootElement.GetProperty("status").GetInt32() == expectedStatus) {
+                return document;
+            }
+            document.Dispose();
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} status {expectedStatus}.");
     }
 
     private sealed class CallbackDisposable : IDisposable {
