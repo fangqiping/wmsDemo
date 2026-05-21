@@ -228,6 +228,80 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
+    public async Task OperationTaskCancel_ThroughHttp_ExposesRestartAndSkipActions() {
+        using var _ = UseExtendedOperationTaskDelays();
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-CANCEL-1001");
+
+        var operationTaskId = await WaitForCancelableOperationTaskAsync(flowTaskId);
+
+        var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{operationTaskId}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+
+        var flowTaskResponse = await _client.GetAsync($"/api/FlowTask/{flowTaskId}");
+        flowTaskResponse.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await flowTaskResponse.Content.ReadAsStringAsync());
+        var canceledNode = document.RootElement.GetProperty("executableDetailModels")
+            .EnumerateArray()
+            .Single(node => node.GetProperty("id").GetInt64() == operationTaskId);
+
+        Assert.Equal(8, canceledNode.GetProperty("status").GetInt32());
+        var actions = canceledNode.GetProperty("availableActions").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Contains("restart", actions);
+        Assert.Contains("skip", actions);
+    }
+
+    [Fact]
+    public async Task OperationTaskRestart_ThroughHttp_AcknowledgesCanceledNodeAndCreatesReplacement() {
+        using var _ = UseExtendedOperationTaskDelays();
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-RESTART-1001");
+
+        var operationTaskId = await WaitForCancelableOperationTaskAsync(flowTaskId);
+
+        var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{operationTaskId}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+
+        var restartResponse = await _client.PostAsync($"/api/OperationTask/Restart/{operationTaskId}", null);
+        restartResponse.EnsureSuccessStatusCode();
+
+        var replacementNode = await WaitForReplacementOperationTaskAsync(flowTaskId, operationTaskId);
+        Assert.Equal(3, replacementNode.GetProperty("status").GetInt32());
+
+        var oldNode = await GetExecutableNodeAsync(flowTaskId, operationTaskId);
+        Assert.True(oldNode.GetProperty("acknowledged").GetBoolean());
+        var oldActions = oldNode.GetProperty("availableActions").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Empty(oldActions);
+
+        var newActions = replacementNode.GetProperty("availableActions").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Contains("cancel", newActions);
+    }
+
+    [Fact]
+    public async Task OperationTaskSkip_ThroughHttp_AcknowledgesCanceledNodeAndAdvancesFlow() {
+        using var _ = UseExtendedOperationTaskDelays();
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-SKIP-1001");
+
+        var operationTaskId = await WaitForCancelableOperationTaskAsync(flowTaskId);
+
+        var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{operationTaskId}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+
+        var skipResponse = await _client.PostAsync($"/api/OperationTask/Skip/{operationTaskId}", null);
+        skipResponse.EnsureSuccessStatusCode();
+
+        var skippedNode = await GetExecutableNodeAsync(flowTaskId, operationTaskId);
+        Assert.True(skippedNode.GetProperty("acknowledged").GetBoolean());
+        var actions = skippedNode.GetProperty("availableActions").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Empty(actions);
+
+        using var document = await WaitForFlowTaskDocumentAsync(flowTaskId, rootStatus: 3, expectedExecutableCountAtLeast: 3);
+        var nodeIds = document.RootElement.GetProperty("executableDetailModels")
+            .EnumerateArray()
+            .Select(node => node.GetProperty("id").GetInt64())
+            .ToArray();
+        Assert.DoesNotContain(operationTaskId, nodeIds.Where(id => id != operationTaskId));
+    }
+
+    [Fact]
     public async Task InboundOrderStartFlow_EventuallyMarksOrderCompleted_WhenTaskFinishesQuickly() {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
@@ -273,6 +347,129 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         Assert.NotNull(refreshed);
         Assert.Equal((int)Domain.Enums.OrderStatus.Completed, refreshed!.Status);
         Assert.NotNull(refreshed.CompletedTime);
+    }
+
+    private IDisposable UseExtendedOperationTaskDelays() {
+        var originalConveyorDelay = ConveyorTransferOperationTask.DefaultDelayMilliseconds;
+        var originalStoreDelay = StackCraneStoreOperationTask.DefaultDelayMilliseconds;
+        var originalRetrieveDelay = StackCraneRetrieveOperationTask.DefaultDelayMilliseconds;
+        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 400;
+        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 400;
+        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 400;
+        return new CallbackDisposable(() => {
+            ConveyorTransferOperationTask.DefaultDelayMilliseconds = originalConveyorDelay;
+            StackCraneStoreOperationTask.DefaultDelayMilliseconds = originalStoreDelay;
+            StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = originalRetrieveDelay;
+        });
+    }
+
+    private async Task<long> CreateAndStartInboundOrderAsync(string code) {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sku = (await manager.GetAsync<int, Sku>()).First();
+        var targetLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+
+        var createResponse = await _client.PostAsJsonAsync("/api/InboundOrders", new InboundOrderModel {
+            Code = code,
+            Source = "IN-01",
+            Lines = new List<InboundOrderLineModel> {
+                new() {
+                    SkuId = sku.Id,
+                    Quantity = 1,
+                    TargetLocationId = targetLocation.Id
+                }
+            }
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var created = await createResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
+        Assert.NotNull(created);
+
+        var startResponse = await _client.PostAsync($"/api/InboundOrders/{created!.Id}/start-flow", null);
+        startResponse.EnsureSuccessStatusCode();
+        var started = await startResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
+        Assert.NotNull(started);
+        Assert.NotNull(started!.FlowTaskId);
+        return started.FlowTaskId.Value;
+    }
+
+    private async Task<long> WaitForCancelableOperationTaskAsync(long flowTaskId) {
+        for (var retry = 0; retry < 60; retry++) {
+            using var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            var node = document.RootElement.GetProperty("executableDetailModels")
+                .EnumerateArray()
+                .FirstOrDefault(item => item.GetProperty("executableType").GetInt32() == 0
+                    && item.GetProperty("availableActions").EnumerateArray().Any(action => action.GetString() == "cancel"));
+            if (node.ValueKind != JsonValueKind.Undefined) {
+                return node.GetProperty("id").GetInt64();
+            }
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for a cancelable operation task for flow {flowTaskId}.");
+    }
+
+    private async Task<JsonElement> WaitForReplacementOperationTaskAsync(long flowTaskId, long originalOperationTaskId) {
+        for (var retry = 0; retry < 40; retry++) {
+            using var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            var node = document.RootElement.GetProperty("executableDetailModels")
+                .EnumerateArray()
+                .FirstOrDefault(item => item.GetProperty("executableType").GetInt32() == 0
+                    && item.GetProperty("id").GetInt64() != originalOperationTaskId
+                    && item.GetProperty("status").GetInt32() == 3);
+            if (node.ValueKind != JsonValueKind.Undefined) {
+                return node.Clone();
+            }
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for replacement operation task for flow {flowTaskId}.");
+    }
+
+    private async Task<JsonElement> GetExecutableNodeAsync(long flowTaskId, long executableId) {
+        using var document = await GetFlowTaskDocumentAsync(flowTaskId);
+        return document.RootElement.GetProperty("executableDetailModels")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetInt64() == executableId)
+            .Clone();
+    }
+
+    private async Task<JsonDocument> WaitForFlowTaskDocumentAsync(long flowTaskId, int rootStatus, int expectedExecutableCountAtLeast) {
+        for (var retry = 0; retry < 40; retry++) {
+            var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            var root = document.RootElement;
+            if (root.GetProperty("status").GetInt32() == rootStatus
+                && root.GetProperty("executableDetailModels").GetArrayLength() >= expectedExecutableCountAtLeast) {
+                return document;
+            }
+            document.Dispose();
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} root status {rootStatus} and executable count {expectedExecutableCountAtLeast}.");
+    }
+
+    private async Task<JsonDocument> GetFlowTaskDocumentAsync(long flowTaskId) {
+        var response = await _client.GetAsync($"/api/FlowTask/{flowTaskId}");
+        response.EnsureSuccessStatusCode();
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    }
+
+    private sealed class CallbackDisposable : IDisposable {
+        private readonly Action _callback;
+        private bool _disposed;
+
+        public CallbackDisposable(Action callback) {
+            _callback = callback;
+        }
+
+        public void Dispose() {
+            if (_disposed) {
+                return;
+            }
+
+            _callback();
+            _disposed = true;
+        }
     }
 
     public Task InitializeAsync() {
