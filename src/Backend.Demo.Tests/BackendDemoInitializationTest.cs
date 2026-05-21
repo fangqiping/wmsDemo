@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Backend.Demo.DependencyInjection;
 using Backend.Demo.Domain;
@@ -16,6 +17,7 @@ using Xunit;
 namespace Backend.Demo.Tests;
 
 public sealed class BackendDemoInitializationTest : IDisposable {
+    private const string InboundFlowCode = "inbound-basic";
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"backend-demo-{Guid.NewGuid():N}.db");
 
     [Fact]
@@ -100,6 +102,83 @@ public sealed class BackendDemoInitializationTest : IDisposable {
 
         var result = Convert.ToInt64(await command.ExecuteScalarAsync() ?? 0L);
         Assert.True(result >= 1L);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_PublishesRetryableDemoOperationNodes() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication($"Data Source={_dbPath}");
+
+        await using var provider = services.BuildServiceProvider(true);
+        await using var scope = provider.CreateAsyncScope();
+
+        var initializer = scope.ServiceProvider.GetRequiredService<IBackendDemoInitializer>();
+        await initializer.InitializeAsync();
+
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var definitions = (await manager.GetAsync<string, FlowDefinition>(
+            query => query.Where(definition => definition.ActiveVersionId != null).OrderBy(definition => definition.Id)))
+            .ToArray();
+        var activeVersionIds = definitions.Select(definition => definition.ActiveVersionId!.Value).ToArray();
+        var activeVersions = await manager.GetAsync<long, FlowVersion>(
+            versions => versions.Where(version => activeVersionIds.Contains(version.Id))
+                .OrderBy(version => version.Id));
+
+        Assert.All(activeVersions, version => {
+            using var document = JsonDocument.Parse(version.CompiledGraphJson);
+            var nodes = document.RootElement.GetProperty("nodes").EnumerateArray()
+                .Where(node => node.GetProperty("id").GetString() != "Root")
+                .ToArray();
+            Assert.NotEmpty(nodes);
+            Assert.All(nodes, node => {
+                Assert.False(node.GetProperty("shouldThrowOnFailed").GetBoolean());
+                Assert.False(node.GetProperty("shouldThrowOnCanceled").GetBoolean());
+            });
+        });
+    }
+
+    [Fact]
+    public async Task InitializeAsync_RepublishesDemoFlows_WhenSeedDraftChanges() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication($"Data Source={_dbPath}");
+
+        await using var provider = services.BuildServiceProvider(true);
+        await using var scope = provider.CreateAsyncScope();
+
+        var initializer = scope.ServiceProvider.GetRequiredService<IBackendDemoInitializer>();
+        await initializer.InitializeAsync();
+
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var originalVersions = await manager.GetAsync<long, FlowVersion>(
+            versions => versions.Where(version => version.Id > 0).OrderBy(version => version.Id));
+        Assert.Equal(2, originalVersions.Count());
+
+        await manager.UpdateAsync<string, FlowDraft>(InboundFlowCode, draft => {
+            draft.DraftDocumentJson = draft.DraftDocumentJson
+                .Replace("\"shouldThrowOnFailed\":false", "\"shouldThrowOnFailed\":true", StringComparison.Ordinal)
+                .Replace("\"shouldThrowOnCanceled\":false", "\"shouldThrowOnCanceled\":true", StringComparison.Ordinal);
+        });
+
+        await initializer.InitializeAsync();
+
+        var inboundDefinition = await manager.GetByIdAsync<string, FlowDefinition>(InboundFlowCode);
+        Assert.NotNull(inboundDefinition);
+        var inboundVersions = await manager.GetAsync<long, FlowVersion>(
+            versions => versions.Where(version => version.FlowDefinitionId == InboundFlowCode).OrderBy(version => version.VersionNumber));
+        Assert.Equal(2, inboundVersions.Count());
+        var latestInbound = inboundVersions.Last();
+        Assert.Equal(inboundDefinition!.ActiveVersionId, latestInbound.Id);
+
+        using var document = JsonDocument.Parse(latestInbound.CompiledGraphJson);
+        var nodes = document.RootElement.GetProperty("nodes").EnumerateArray()
+            .Where(node => node.GetProperty("id").GetString() != "Root")
+            .ToArray();
+        Assert.All(nodes, node => {
+            Assert.False(node.GetProperty("shouldThrowOnFailed").GetBoolean());
+            Assert.False(node.GetProperty("shouldThrowOnCanceled").GetBoolean());
+        });
     }
 
     public void Dispose() {

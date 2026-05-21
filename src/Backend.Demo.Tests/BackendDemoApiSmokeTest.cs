@@ -8,7 +8,6 @@ using FlowEngine.Execution;
 using FlowEngine.Execution.FlowEngine;
 using FlowEngine.Server.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -16,6 +15,7 @@ namespace Backend.Demo.Tests;
 
 public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"backend-demo-api-{Guid.NewGuid():N}.db");
+    private readonly string _defaultDbPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../Backend.Demo/backend-demo.db"));
     private WebApplicationFactory<Program> _factory = default!;
     private HttpClient _client = default!;
 
@@ -276,13 +276,15 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     public Task InitializeAsync() {
+        if (File.Exists(_defaultDbPath)) {
+            File.Delete(_defaultDbPath);
+        }
+        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 10;
+        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 10;
+        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 10;
         _factory = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder => {
-                builder.ConfigureAppConfiguration((_, config) => {
-                    config.AddInMemoryCollection(new Dictionary<string, string?> {
-                        ["ConnectionStrings:BackendDemo"] = $"Data Source={_dbPath}"
-                    });
-                });
+                builder.UseSetting("ConnectionStrings:BackendDemo", $"Data Source={_dbPath}");
             });
         _client = _factory.CreateClient();
         return Task.CompletedTask;
@@ -294,5 +296,11 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         if (File.Exists(_dbPath)) {
             File.Delete(_dbPath);
         }
+        if (File.Exists(_defaultDbPath)) {
+            File.Delete(_defaultDbPath);
+        }
+        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 30000;
+        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 20000;
+        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 20000;
     }
 }

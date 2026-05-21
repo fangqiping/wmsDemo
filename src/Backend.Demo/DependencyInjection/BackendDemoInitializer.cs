@@ -149,16 +149,47 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
 
     private async Task EnsureFlowPublishedAsync(Func<int, SaveFlowDraftRequest> draftFactory) {
         var draftRequest = draftFactory(0);
+        var existingDraft = await _manager.GetByIdAsync<string, FlowDraft>(draftRequest.Code);
         var definition = await _manager.GetByIdAsync<string, FlowDefinition>(draftRequest.Code);
-        if (definition is { ActiveVersionId: not null }) {
+        FlowDraftDetail? currentDraft = existingDraft == null
+            ? null
+            : new FlowDraftDetail {
+                Code = draftRequest.Code,
+                Name = draftRequest.Name,
+                Description = draftRequest.Description,
+                Revision = existingDraft.Revision,
+                DraftDocumentJson = existingDraft.DraftDocumentJson,
+                UpdatedAt = existingDraft.UpdatedAt,
+                UpdatedBy = existingDraft.UpdatedBy
+            };
+
+        var requiresDraftUpdate = existingDraft == null
+            || existingDraft.DraftDocumentJson != draftRequest.DraftDocumentJson
+            || definition?.Name != draftRequest.Name
+            || definition.Description != draftRequest.Description;
+
+        if (requiresDraftUpdate) {
+            draftRequest.Revision = existingDraft?.Revision ?? 0;
+            currentDraft = await _flowDraftService.SaveDraftAsync(draftRequest);
+        }
+
+        if (currentDraft == null) {
+            throw new InvalidOperationException($"FlowDraft-{draftRequest.Code} was not created.");
+        }
+
+        if (definition?.ActiveVersionId is not long activeVersionId) {
+            await PublishDraftAsync(currentDraft);
             return;
         }
 
-        var existingDraft = await _manager.GetByIdAsync<string, FlowDraft>(draftRequest.Code);
-        draftRequest.Revision = existingDraft?.Revision ?? 0;
+        var activeVersion = await _manager.GetByIdAsync<long, FlowVersion>(activeVersionId);
+        if (activeVersion == null || activeVersion.SourceDraftRevision < currentDraft.Revision) {
+            await PublishDraftAsync(currentDraft);
+        }
+    }
 
-        var draft = await _flowDraftService.SaveDraftAsync(draftRequest);
-        await _flowPublisher.PublishAsync(new PublishFlowRequest {
+    private Task PublishDraftAsync(FlowDraftDetail draft) {
+        return _flowPublisher.PublishAsync(new PublishFlowRequest {
             Code = draft.Code,
             ExpectedRevision = draft.Revision,
             PublishedBy = "backend-demo"

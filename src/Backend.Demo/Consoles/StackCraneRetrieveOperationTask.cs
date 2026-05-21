@@ -4,6 +4,8 @@ using FlowEngine.Execution.Consoles;
 namespace Backend.Demo;
 
 public sealed class StackCraneRetrieveOperationTask : OperationTask<StackCraneConsole> {
+    public static int DefaultDelayMilliseconds { get; set; } = 20000;
+
     [Input]
     public string OrderCode { get; set; } = string.Empty;
 
@@ -14,7 +16,7 @@ public sealed class StackCraneRetrieveOperationTask : OperationTask<StackCraneCo
     public string SourceLocationCode { get; set; } = string.Empty;
 
     [Input]
-    public int DelayMilliseconds { get; set; } = 20000;
+    public int DelayMilliseconds { get; set; } = DefaultDelayMilliseconds;
 
     [Output]
     public string CompletionMessage { get; set; } = string.Empty;

@@ -4,6 +4,8 @@ using FlowEngine.Execution.Consoles;
 namespace Backend.Demo;
 
 public sealed class ConveyorTransferOperationTask : OperationTask<ConveyorConsole> {
+    public static int DefaultDelayMilliseconds { get; set; } = 30000;
+
     [Input]
     public string OrderCode { get; set; } = string.Empty;
 
@@ -14,7 +16,7 @@ public sealed class ConveyorTransferOperationTask : OperationTask<ConveyorConsol
     public string ToLocationCode { get; set; } = string.Empty;
 
     [Input]
-    public int DelayMilliseconds { get; set; } = 30000;
+    public int DelayMilliseconds { get; set; } = DefaultDelayMilliseconds;
 
     [Output]
     public string CompletionMessage { get; set; } = string.Empty;
