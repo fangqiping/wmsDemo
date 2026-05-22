@@ -20,6 +20,8 @@ public class Location : IResource<int> {
 
     public LocationType LocationType { get; set; }
     public LocationStatus Status { get; set; }
+    public int? CurrentPalletId { get; set; }
+    public Pallet? CurrentPallet { get; set; }
     public int WarehouseId { get; set; }
     public Warehouse? Warehouse { get; set; }
 }

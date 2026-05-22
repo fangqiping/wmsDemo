@@ -17,6 +17,7 @@ public static class BackendDemoDataServiceCollectionExtensions {
         services.AddDataCore(new[] {
             typeof(Warehouse),
             typeof(Location),
+            typeof(Pallet),
             typeof(Sku),
             typeof(InboundOrder),
             typeof(InboundOrderLine),

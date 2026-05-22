@@ -37,10 +37,15 @@ public sealed class BackendDemoInitializationTest : IDisposable {
 
         Assert.True(await manager.AnyAsync<int, Warehouse>());
         Assert.True(await manager.AnyAsync<int, Location>());
+        Assert.True(await manager.AnyAsync<int, Pallet>());
         Assert.True(await manager.AnyAsync<int, Sku>());
         Assert.Equal(2, await manager.CountAsync<int, FlowBinding>());
         Assert.Equal(2, await manager.CountAsync<string, FlowDefinition>());
         Assert.Equal(2, await manager.CountAsync<long, FlowVersion>());
+
+        var locations = (await manager.GetAsync<int, Location>(sort: query => query.OrderBy(location => location.Code))).ToArray();
+        Assert.Contains(locations, location => location.Code == "RACK-A1" && location.Status == Domain.Enums.LocationStatus.Empty && location.CurrentPalletId == null);
+        Assert.Contains(locations, location => location.Code == "RACK-A2" && location.Status == Domain.Enums.LocationStatus.Occupied && location.CurrentPalletId != null);
 
         var definitions = await manager.GetAsync<string, FlowDefinition>(sort: flows => flows.OrderBy(flow => flow.Id));
         Assert.All(definitions, definition => Assert.Equal(FlowDefinitionStatus.Active, definition.Status));

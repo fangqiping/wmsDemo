@@ -120,7 +120,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         await manager.UpdateAsync<long, FlowTaskDetail>(started!.FlowTaskId!.Value, entity => {
             entity.Status = ExecutableStatus.Completed;
             entity.FinishedTime = DateTimeOffset.UtcNow;
-        });
+        }, maxRetries: 10);
 
         var readResponse = await _client.GetAsync($"/api/InboundOrders/{started.Id}");
         readResponse.EnsureSuccessStatusCode();
@@ -326,7 +326,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
-    public async Task InboundFlow_AcquiresTargetLocationDuringRun_AndReleasesItAsOccupied() {
+    public async Task InboundFlow_AcquiresTargetLocationDuringRun_AndReleasesItAsOccupiedWithBoundPallet() {
         using var _ = UseObservableResourceOperationTaskDelays();
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
@@ -344,19 +344,29 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         var completedLocation = await WaitForLocationStateAsync(targetLocation.Id, acquired: false);
         Assert.Equal(LocationStatus.Occupied, completedLocation.Status);
+        Assert.NotNull(completedLocation.CurrentPalletId);
+        var pallet = await manager.GetByIdAsync<int, Pallet>(completedLocation.CurrentPalletId!.Value);
+        Assert.NotNull(pallet);
+        Assert.True(pallet!.Enabled);
     }
 
     [Fact]
-    public async Task OutboundFlow_AcquiresSourceLocationDuringRun_AndReleasesItAsEmpty() {
+    public async Task OutboundFlow_FallsBackToMatchingOccupiedLocation_AndReleasesLocationAndPallet() {
         using var _ = UseObservableResourceOperationTaskDelays();
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
-        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
-        await manager.UpdateAsync<int, Location>(sourceLocation.Id, entity => entity.Status = LocationStatus.Occupied);
+        var preferredSourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+        var actualSourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A2");
+        Assert.Equal(LocationStatus.Empty, preferredSourceLocation.Status);
+        Assert.Equal(LocationStatus.Occupied, actualSourceLocation.Status);
+        Assert.NotNull(actualSourceLocation.CurrentPalletId);
 
         var flowTaskId = await CreateAndStartOutboundOrderAsync("OUT-RESOURCE-1001");
 
-        using (var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, sourceLocation.Id)) {
+        using (var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, actualSourceLocation.Id)) {
+            Assert.Equal(3, runningFlowDocument.RootElement.GetProperty("status").GetInt32());
+        }
+        using (var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, actualSourceLocation.CurrentPalletId!.Value)) {
             Assert.Equal(3, runningFlowDocument.RootElement.GetProperty("status").GetInt32());
         }
 
@@ -364,8 +374,27 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
             Assert.Equal(4, flowTaskDocument.RootElement.GetProperty("status").GetInt32());
         }
 
-        var completedLocation = await WaitForLocationStateAsync(sourceLocation.Id, acquired: false);
+        var completedLocation = await WaitForLocationStateAsync(actualSourceLocation.Id, acquired: false);
         Assert.Equal(LocationStatus.Empty, completedLocation.Status);
+        Assert.Null(completedLocation.CurrentPalletId);
+        var pallet = await WaitForPalletStateAsync(actualSourceLocation.CurrentPalletId!.Value, enabled: false, acquired: false);
+        Assert.False(pallet.Enabled);
+    }
+
+    [Fact]
+    public async Task InboundFlow_FallsBackToEmptyLocation_WhenPreferredRackIsOccupied() {
+        using var _ = UseObservableResourceOperationTaskDelays();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var occupiedPreferredLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A2");
+        var fallbackLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+        Assert.Equal(LocationStatus.Occupied, occupiedPreferredLocation.Status);
+        Assert.Equal(LocationStatus.Empty, fallbackLocation.Status);
+
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-RULE-1001", "RACK-A2");
+
+        using var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, fallbackLocation.Id);
+        Assert.Equal(3, runningFlowDocument.RootElement.GetProperty("status").GetInt32());
     }
 
     [Fact]
@@ -395,13 +424,8 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var started = await startResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
         Assert.NotNull(started);
 
-        await manager.UpdateAsync<long, FlowTaskDetail>(started!.FlowTaskId!.Value, entity => {
-            entity.Status = ExecutableStatus.Completed;
-            entity.FinishedTime = DateTimeOffset.UtcNow;
-        });
-
         InboundOrderModel? refreshed = null;
-        for (var retry = 0; retry < 10; retry++) {
+        for (var retry = 0; retry < 20; retry++) {
             var readResponse = await _client.GetAsync($"/api/InboundOrders/{created.Id}");
             readResponse.EnsureSuccessStatusCode();
             refreshed = await readResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
@@ -420,9 +444,9 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var originalConveyorDelay = ConveyorTransferOperationTask.DefaultDelayMilliseconds;
         var originalStoreDelay = StackCraneStoreOperationTask.DefaultDelayMilliseconds;
         var originalRetrieveDelay = StackCraneRetrieveOperationTask.DefaultDelayMilliseconds;
-        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 400;
-        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 400;
-        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 400;
+        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 2000;
+        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 2000;
+        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 2000;
         return new CallbackDisposable(() => {
             ConveyorTransferOperationTask.DefaultDelayMilliseconds = originalConveyorDelay;
             StackCraneStoreOperationTask.DefaultDelayMilliseconds = originalStoreDelay;
@@ -444,11 +468,11 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         });
     }
 
-    private async Task<long> CreateAndStartInboundOrderAsync(string code) {
+    private async Task<long> CreateAndStartInboundOrderAsync(string code, string preferredLocationCode = "RACK-A1") {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
         var sku = (await manager.GetAsync<int, Sku>()).First();
-        var targetLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+        var targetLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == preferredLocationCode);
 
         var createResponse = await _client.PostAsJsonAsync("/api/InboundOrders", new InboundOrderModel {
             Code = code,
@@ -473,11 +497,11 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         return started.FlowTaskId.Value;
     }
 
-    private async Task<long> CreateAndStartOutboundOrderAsync(string code) {
+    private async Task<long> CreateAndStartOutboundOrderAsync(string code, string preferredLocationCode = "RACK-A1") {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
         var sku = (await manager.GetAsync<int, Sku>()).First();
-        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A1");
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == preferredLocationCode);
 
         var createResponse = await _client.PostAsJsonAsync("/api/OutboundOrders", new OutboundOrderModel {
             Code = code,
@@ -503,11 +527,14 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<long> WaitForCancelableOperationTaskAsync(long flowTaskId) {
-        for (var retry = 0; retry < 60; retry++) {
+        for (var retry = 0; retry < 200; retry++) {
             using var document = await GetFlowTaskDocumentAsync(flowTaskId);
             var node = document.RootElement.GetProperty("executableDetailModels")
                 .EnumerateArray()
                 .FirstOrDefault(item => item.GetProperty("executableType").GetInt32() == 0
+                    && item.GetProperty("status").GetInt32() == 3
+                    && !item.GetProperty("nodeId").GetString()!.StartsWith("Acquire", StringComparison.Ordinal)
+                    && !item.GetProperty("nodeId").GetString()!.StartsWith("Resolve", StringComparison.Ordinal)
                     && item.GetProperty("availableActions").EnumerateArray().Any(action => action.GetString() == "cancel"));
             if (node.ValueKind != JsonValueKind.Undefined) {
                 return node.GetProperty("id").GetInt64();
@@ -653,6 +680,23 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         throw new Xunit.Sdk.XunitException(
             $"Timed out waiting for location {locationId} acquired={acquired}. Last location: {JsonSerializer.Serialize(lastLocation)}");
+    }
+
+    private async Task<Pallet> WaitForPalletStateAsync(int palletId, bool enabled, bool acquired) {
+        Pallet? lastPallet = null;
+        for (var retry = 0; retry < 120; retry++) {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+            var pallet = await manager.GetByIdAsync<int, Pallet>(palletId);
+            lastPallet = pallet;
+            if (pallet?.Enabled == enabled && pallet.Acquired == acquired) {
+                return pallet;
+            }
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"Timed out waiting for pallet {palletId} enabled={enabled} acquired={acquired}. Last pallet: {JsonSerializer.Serialize(lastPallet)}");
     }
 
     private sealed class CallbackDisposable : IDisposable {

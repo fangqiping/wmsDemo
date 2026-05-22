@@ -94,8 +94,7 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
             Name = "Demo Warehouse"
         });
 
-        var transaction = _manager.CreateTransaction();
-        await transaction.AddAsync<int, Location>(new Location {
+        await _manager.AddAsync<int, Location>(new Location {
             Code = "IN-01",
             Name = "Inbound Station 01",
             Enabled = true,
@@ -104,7 +103,7 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
             Status = LocationStatus.Available,
             WarehouseId = warehouse.Id
         });
-        await transaction.AddAsync<int, Location>(new Location {
+        await _manager.AddAsync<int, Location>(new Location {
             Code = "RACK-A1",
             Name = "Rack A1",
             Enabled = true,
@@ -113,7 +112,34 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
             Status = LocationStatus.Empty,
             WarehouseId = warehouse.Id
         });
-        await transaction.AddAsync<int, Location>(new Location {
+        var sku001 = await _manager.AddAsync<int, Sku>(new Sku {
+            Code = "SKU-001",
+            Name = "Demo Tote",
+            Spec = "Blue / 600x400"
+        });
+        await _manager.AddAsync<int, Sku>(new Sku {
+            Code = "SKU-002",
+            Name = "Demo Carton",
+            Spec = "Brown / 300x200"
+        });
+        var palletA2 = await _manager.AddAsync<int, Pallet>(new Pallet {
+            Code = "PLT-SEED-RACK-A2",
+            Enabled = true,
+            Acquired = false,
+            SkuId = sku001.Id,
+            Quantity = 1
+        });
+        await _manager.AddAsync<int, Location>(new Location {
+            Code = "RACK-A2",
+            Name = "Rack A2",
+            Enabled = true,
+            Acquired = false,
+            LocationType = LocationType.Rack,
+            Status = LocationStatus.Occupied,
+            CurrentPalletId = palletA2.Id,
+            WarehouseId = warehouse.Id
+        });
+        await _manager.AddAsync<int, Location>(new Location {
             Code = "OUT-01",
             Name = "Outbound Station 01",
             Enabled = true,
@@ -122,19 +148,6 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
             Status = LocationStatus.Available,
             WarehouseId = warehouse.Id
         });
-
-        await transaction.AddAsync<int, Sku>(new Sku {
-            Code = "SKU-001",
-            Name = "Demo Tote",
-            Spec = "Blue / 600x400"
-        });
-        await transaction.AddAsync<int, Sku>(new Sku {
-            Code = "SKU-002",
-            Name = "Demo Carton",
-            Spec = "Brown / 300x200"
-        });
-
-        await transaction.CommitAsync();
     }
 
     private async Task EnsureFlowBindingsAsync() {

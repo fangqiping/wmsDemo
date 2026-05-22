@@ -1,5 +1,4 @@
 using System.Threading;
-using Backend.Demo.Domain.Enums;
 using FlowEngine.Execution.Consoles;
 
 namespace Backend.Demo;
@@ -20,6 +19,9 @@ public sealed class StackCraneRetrieveOperationTask : OperationTask<StackCraneCo
     public int SourceLocationId { get; set; }
 
     [Input]
+    public int SourcePalletId { get; set; }
+
+    [Input]
     public int DelayMilliseconds { get; set; } = DefaultDelayMilliseconds;
 
     [Output]
@@ -27,7 +29,7 @@ public sealed class StackCraneRetrieveOperationTask : OperationTask<StackCraneCo
 
     protected override async Task DoProcessAsync(StackCraneConsole console, CancellationToken cancellationToken) {
         await Task.Delay(DelayMilliseconds, cancellationToken);
-        await console.UpdateLocationStatusAsync(SourceLocationId, LocationStatus.Empty);
+        await console.RetrieveAsync(SourceLocationId, SourcePalletId);
         CompletionMessage = $"{OrderCode}: stack crane retrieved {SkuCode} from {SourceLocationCode}.";
     }
 }

@@ -36,8 +36,10 @@ public sealed class OrderFlowService : IOrderFlowService {
         var options = new ExecutionOptions.Builder(flow)
             .WithInput(order.Code, "OrderCode")
             .WithInput(order.Source, "SourceLocationCode")
+            .WithInput(targetLocation.WarehouseId, "WarehouseId")
             .WithInput(targetLocation.Code, "TargetLocationCode")
             .WithInput(targetLocation.Id, "TargetLocationId")
+            .WithInput(sku.Id, "SkuId")
             .WithInput(sku.Code, "SkuCode")
             .Build();
 
@@ -69,9 +71,11 @@ public sealed class OrderFlowService : IOrderFlowService {
         var (definition, version, flow) = await ResolveFlowAsync(BusinessFlowType.OutboundOrder, order.FlowDefinitionCode);
         var options = new ExecutionOptions.Builder(flow)
             .WithInput(order.Code, "OrderCode")
+            .WithInput(sourceLocation.WarehouseId, "WarehouseId")
             .WithInput(sourceLocation.Code, "SourceLocationCode")
             .WithInput(sourceLocation.Id, "SourceLocationId")
             .WithInput(order.Destination, "TargetLocationCode")
+            .WithInput(sku.Id, "SkuId")
             .WithInput(sku.Code, "SkuCode")
             .Build();
 

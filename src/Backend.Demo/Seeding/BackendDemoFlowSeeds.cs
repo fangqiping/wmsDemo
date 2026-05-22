@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Backend.Demo.Domain;
+using Backend.Demo.Resource;
 using FlowEngine.Execution.Design;
 using FlowEngine.Execution.Consoles;
 using FlowEngine.Execution.Resource;
@@ -38,8 +39,10 @@ internal static class BackendDemoFlowSeeds {
             variables = new object[] {
                 Variable("OrderCode", "string", "input", string.Empty),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
+                Variable("WarehouseId", "int", "input", 0),
                 Variable("TargetLocationCode", "string", "input", string.Empty),
                 Variable("TargetLocationId", "int", "input", 0),
+                Variable("SkuId", "int", "input", 0),
                 Variable("SkuCode", "string", "input", string.Empty),
                 Variable("Status", "string", "output", "Draft")
             },
@@ -47,13 +50,26 @@ internal static class BackendDemoFlowSeeds {
                 Operation(
                     id: "AcquireTargetLocation",
                     consoleId: FunctionConsole.NAME,
-                    operationTaskType: typeof(IdAcquireResourceTask<int, Location>).FullName!,
+                    operationTaskType: typeof(AcquireEmptyRackLocationTask).FullName!,
                     inputs: new object[] {
-                        Input("TargetLocationId", nameof(IdAcquireResourceTask<int, Location>.ResourceId))
+                        Input("WarehouseId", nameof(AcquireEmptyRackLocationTask.WarehouseId)),
+                        Input("TargetLocationId", nameof(AcquireEmptyRackLocationTask.PreferredLocationId))
                     },
-                    outputs: Array.Empty<object>(),
+                    outputs: new object[] {
+                        Output(nameof(AcquireEmptyRackLocationTask.Acquired), "TargetLocationId")
+                    },
                     resourceOutputs: new object[] {
-                        ResourceOutput(nameof(IdAcquireResourceTask<int, Location>.ResourceId), typeof(Location).FullName!)
+                        ResourceOutput(nameof(AcquireEmptyRackLocationTask.Acquired), typeof(Location).FullName!)
+                    }),
+                Operation(
+                    id: "ResolveTargetLocation",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(LoadLocationSnapshotOperationTask).FullName!,
+                    inputs: new object[] {
+                        Input("TargetLocationId", nameof(LoadLocationSnapshotOperationTask.LocationId))
+                    },
+                    outputs: new object[] {
+                        Output(nameof(LoadLocationSnapshotOperationTask.LocationCode), "TargetLocationCode")
                     }),
                 Operation(
                     id: "Receive",
@@ -71,6 +87,7 @@ internal static class BackendDemoFlowSeeds {
                     operationTaskType: typeof(StackCraneStoreOperationTask).FullName!,
                     inputs: new object[] {
                         Input("OrderCode", nameof(StackCraneStoreOperationTask.OrderCode)),
+                        Input("SkuId", nameof(StackCraneStoreOperationTask.SkuId)),
                         Input("SkuCode", nameof(StackCraneStoreOperationTask.SkuCode)),
                         Input("TargetLocationCode", nameof(StackCraneStoreOperationTask.TargetLocationCode)),
                         Input("TargetLocationId", nameof(StackCraneStoreOperationTask.TargetLocationId))
@@ -81,7 +98,8 @@ internal static class BackendDemoFlowSeeds {
             },
             routes = new object[] {
                 Path("Root", new[] { "AcquireTargetLocation" }),
-                Path("AcquireTargetLocation", new[] { "Receive" }),
+                Path("AcquireTargetLocation", new[] { "ResolveTargetLocation" }),
+                Path("ResolveTargetLocation", new[] { "Receive" }),
                 Path("Receive", new[] { "Store" })
             }
         });
@@ -92,9 +110,12 @@ internal static class BackendDemoFlowSeeds {
             id = "OutboundBasicFlow",
             variables = new object[] {
                 Variable("OrderCode", "string", "input", string.Empty),
+                Variable("WarehouseId", "int", "input", 0),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
                 Variable("SourceLocationId", "int", "input", 0),
                 Variable("TargetLocationCode", "string", "input", string.Empty),
+                Variable("SourcePalletId", "int", "input", 0),
+                Variable("SkuId", "int", "input", 0),
                 Variable("SkuCode", "string", "input", string.Empty),
                 Variable("Status", "string", "output", "Draft")
             },
@@ -102,13 +123,41 @@ internal static class BackendDemoFlowSeeds {
                 Operation(
                     id: "AcquireSourceLocation",
                     consoleId: FunctionConsole.NAME,
-                    operationTaskType: typeof(IdAcquireResourceTask<int, Location>).FullName!,
+                    operationTaskType: typeof(AcquireOccupiedRackLocationTask).FullName!,
                     inputs: new object[] {
-                        Input("SourceLocationId", nameof(IdAcquireResourceTask<int, Location>.ResourceId))
+                        Input("WarehouseId", nameof(AcquireOccupiedRackLocationTask.WarehouseId)),
+                        Input("SkuId", nameof(AcquireOccupiedRackLocationTask.SkuId)),
+                        Input("SourceLocationId", nameof(AcquireOccupiedRackLocationTask.PreferredLocationId))
                     },
-                    outputs: Array.Empty<object>(),
+                    outputs: new object[] {
+                        Output(nameof(AcquireOccupiedRackLocationTask.Acquired), "SourceLocationId")
+                    },
                     resourceOutputs: new object[] {
-                        ResourceOutput(nameof(IdAcquireResourceTask<int, Location>.ResourceId), typeof(Location).FullName!)
+                        ResourceOutput(nameof(AcquireOccupiedRackLocationTask.Acquired), typeof(Location).FullName!)
+                    }),
+                Operation(
+                    id: "ResolveSourceLocation",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(LoadLocationSnapshotOperationTask).FullName!,
+                    inputs: new object[] {
+                        Input("SourceLocationId", nameof(LoadLocationSnapshotOperationTask.LocationId))
+                    },
+                    outputs: new object[] {
+                        Output(nameof(LoadLocationSnapshotOperationTask.LocationCode), "SourceLocationCode"),
+                        Output(nameof(LoadLocationSnapshotOperationTask.CurrentPalletId), "SourcePalletId")
+                    }),
+                Operation(
+                    id: "AcquireSourcePallet",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(IdAcquireResourceTask<int, Pallet>).FullName!,
+                    inputs: new object[] {
+                        Input("SourcePalletId", nameof(IdAcquireResourceTask<int, Pallet>.ResourceId))
+                    },
+                    outputs: new object[] {
+                        Output(nameof(IdAcquireResourceTask<int, Pallet>.Acquired), "SourcePalletId")
+                    },
+                    resourceOutputs: new object[] {
+                        ResourceOutput(nameof(IdAcquireResourceTask<int, Pallet>.Acquired), typeof(Pallet).FullName!)
                     }),
                 Operation(
                     id: "Retrieve",
@@ -118,7 +167,8 @@ internal static class BackendDemoFlowSeeds {
                         Input("OrderCode", nameof(StackCraneRetrieveOperationTask.OrderCode)),
                         Input("SkuCode", nameof(StackCraneRetrieveOperationTask.SkuCode)),
                         Input("SourceLocationCode", nameof(StackCraneRetrieveOperationTask.SourceLocationCode)),
-                        Input("SourceLocationId", nameof(StackCraneRetrieveOperationTask.SourceLocationId))
+                        Input("SourceLocationId", nameof(StackCraneRetrieveOperationTask.SourceLocationId)),
+                        Input("SourcePalletId", nameof(StackCraneRetrieveOperationTask.SourcePalletId))
                     },
                     outputs: Array.Empty<object>()),
                 Operation(
@@ -136,7 +186,9 @@ internal static class BackendDemoFlowSeeds {
             },
             routes = new object[] {
                 Path("Root", new[] { "AcquireSourceLocation" }),
-                Path("AcquireSourceLocation", new[] { "Retrieve" }),
+                Path("AcquireSourceLocation", new[] { "ResolveSourceLocation" }),
+                Path("ResolveSourceLocation", new[] { "AcquireSourcePallet" }),
+                Path("AcquireSourcePallet", new[] { "Retrieve" }),
                 Path("Retrieve", new[] { "Deliver" })
             }
         });
