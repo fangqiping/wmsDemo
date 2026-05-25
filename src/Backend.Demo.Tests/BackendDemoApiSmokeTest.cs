@@ -195,6 +195,29 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
+    public async Task MasterData_ResourceEndpoints_ExposeLocationAndPalletState() {
+        var locationsResponse = await _client.GetAsync("/api/Locations?ShouldPaginate=false");
+        locationsResponse.EnsureSuccessStatusCode();
+
+        using var locationsDocument = JsonDocument.Parse(await locationsResponse.Content.ReadAsStringAsync());
+        var occupiedLocation = locationsDocument.RootElement.GetProperty("items")
+            .EnumerateArray()
+            .Single(location => location.GetProperty("code").GetString() == "RACK-A2");
+        Assert.True(occupiedLocation.TryGetProperty("currentPalletId", out var currentPalletProperty));
+        Assert.True(currentPalletProperty.GetInt32() > 0);
+
+        var palletsResponse = await _client.GetAsync("/api/Pallets?ShouldPaginate=false");
+        palletsResponse.EnsureSuccessStatusCode();
+
+        using var palletsDocument = JsonDocument.Parse(await palletsResponse.Content.ReadAsStringAsync());
+        var palletCodes = palletsDocument.RootElement.GetProperty("items")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("code").GetString())
+            .ToArray();
+        Assert.Contains("PLT-SEED-RACK-A2", palletCodes);
+    }
+
+    [Fact]
     public async Task FlowTask_GetById_ThroughHttp_ReturnsExecutionDetails() {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();

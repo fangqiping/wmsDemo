@@ -40,6 +40,7 @@ internal static class BackendDemoFlowSeeds {
                 Variable("OrderCode", "string", "input", string.Empty),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
                 Variable("WarehouseId", "int", "input", 0),
+                Variable("RequestedTargetLocationCode", "string", "input", string.Empty),
                 Variable("TargetLocationCode", "string", "input", string.Empty),
                 Variable("TargetLocationId", "int", "input", 0),
                 Variable("SkuId", "int", "input", 0),
@@ -111,6 +112,7 @@ internal static class BackendDemoFlowSeeds {
             variables = new object[] {
                 Variable("OrderCode", "string", "input", string.Empty),
                 Variable("WarehouseId", "int", "input", 0),
+                Variable("RequestedSourceLocationCode", "string", "input", string.Empty),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
                 Variable("SourceLocationId", "int", "input", 0),
                 Variable("TargetLocationCode", "string", "input", string.Empty),

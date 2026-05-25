@@ -8,5 +8,6 @@ public class LocationModel {
     public bool Acquired { get; set; }
     public int LocationType { get; set; }
     public int Status { get; set; }
+    public int? CurrentPalletId { get; set; }
     public int WarehouseId { get; set; }
 }
