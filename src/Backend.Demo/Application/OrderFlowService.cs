@@ -31,12 +31,18 @@ public sealed class OrderFlowService : IOrderFlowService {
             ?? throw new ArgumentException($"Sku-{firstLine.SkuId} not found.");
         var targetLocation = await _manager.GetByIdAsync<int, Location>(firstLine.TargetLocationId)
             ?? throw new ArgumentException($"Location-{firstLine.TargetLocationId} not found.");
+        var inboundPort = (await _manager.GetAsync<int, Port>(
+            search: ports => ports.Where(entity => entity.Enabled && entity.PortType == PortType.Inbound)
+                .OrderBy(entity => entity.Id)))
+            .FirstOrDefault()
+            ?? throw new ArgumentException("No enabled inbound port is configured.");
 
         var (definition, version, flow) = await ResolveFlowAsync(BusinessFlowType.InboundOrder, order.FlowDefinitionCode);
         var options = new ExecutionOptions.Builder(flow)
             .WithInput(order.Code, "OrderCode")
             .WithInput(order.Source, "SourceLocationCode")
             .WithInput(targetLocation.WarehouseId, "WarehouseId")
+            .WithInput(inboundPort.Code, "InboundPortCode")
             .WithInput(targetLocation.Code, "RequestedTargetLocationCode")
             .WithInput(targetLocation.Id, "RequestedTargetLocationId")
             .WithInput(targetLocation.Code, "TargetLocationCode")

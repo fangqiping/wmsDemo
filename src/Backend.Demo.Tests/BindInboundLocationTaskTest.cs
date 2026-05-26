@@ -30,9 +30,15 @@ public sealed class BindInboundLocationTaskTest : IDisposable {
 
         var sku = (await manager.GetAsync<int, Sku>()).First();
         var location = (await manager.GetAsync<int, Location>()).First(entity => entity.Code == "RACK-A1");
+        var inboundPort = (await manager.GetAsync<int, Port>()).First(entity => entity.Code == "IN-PORT-01");
         await manager.UpdateAsync<int, Location>(location.Id, entity => {
             entity.Acquired = true;
             entity.Status = LocationStatus.Empty;
+            entity.CurrentPalletId = null;
+        });
+        await manager.UpdateAsync<int, Port>(inboundPort.Id, entity => {
+            entity.Acquired = true;
+            entity.Status = PortStatus.Occupied;
             entity.CurrentPalletId = null;
         });
 
@@ -40,6 +46,7 @@ public sealed class BindInboundLocationTaskTest : IDisposable {
             Console = console,
             Status = ExecutableStatus.Scheduled,
             OrderCode = "IN-UT-1001",
+            InboundPortId = inboundPort.Id,
             SkuId = sku.Id,
             SkuCode = sku.Code,
             TargetLocationId = location.Id,
@@ -50,11 +57,15 @@ public sealed class BindInboundLocationTaskTest : IDisposable {
         Assert.True(task.Status == ExecutableStatus.Completed, task.ErrorMessage ?? "Task did not complete.");
 
         var refreshedLocation = await manager.GetByIdAsync<int, Location>(location.Id);
+        var refreshedPort = await manager.GetByIdAsync<int, Port>(inboundPort.Id);
         var pallet = await manager.GetByIdAsync<int, Pallet>(task.InboundPalletId);
 
         Assert.NotNull(refreshedLocation);
         Assert.Equal(LocationStatus.Occupied, refreshedLocation!.Status);
         Assert.Equal(task.InboundPalletId, refreshedLocation.CurrentPalletId);
+        Assert.NotNull(refreshedPort);
+        Assert.Equal(PortStatus.Idle, refreshedPort!.Status);
+        Assert.Null(refreshedPort.CurrentPalletId);
         Assert.NotNull(pallet);
         Assert.Equal($"PLT-{task.OrderCode}", pallet!.Code);
         Assert.Equal(sku.Id, pallet.SkuId);

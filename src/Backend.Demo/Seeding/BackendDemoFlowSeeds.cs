@@ -40,6 +40,8 @@ internal static class BackendDemoFlowSeeds {
                 Variable("OrderCode", "string", "input", string.Empty),
                 Variable("SourceLocationCode", "string", "input", string.Empty),
                 Variable("WarehouseId", "int", "input", 0),
+                Variable("InboundPortCode", "string", "input", string.Empty),
+                Variable("InboundPortId", "int", "output", 0),
                 Variable("RequestedTargetLocationCode", "string", "input", string.Empty),
                 Variable("RequestedTargetLocationId", "int", "input", 0),
                 Variable("TargetLocationCode", "string", "input", string.Empty),
@@ -52,13 +54,35 @@ internal static class BackendDemoFlowSeeds {
             },
             nodes = new object[] {
                 Operation(
+                    id: "AcquireInboundPort",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(AcquireInboundPortTask).FullName!,
+                    inputs: new object[] {
+                        Input("WarehouseId", nameof(AcquireInboundPortTask.WarehouseId))
+                    },
+                    outputs: new object[] {
+                        Output(nameof(AcquireInboundPortTask.InboundPortId), "InboundPortId"),
+                        Output(nameof(AcquireInboundPortTask.InboundPortCode), "InboundPortCode")
+                    },
+                    resourceOutputs: new object[] {
+                        ResourceOutput(nameof(AcquireInboundPortTask.InboundPortId), typeof(Port).FullName!)
+                    }),
+                Operation(
                     id: "ConveyorToInboundPort",
                     consoleId: ConveyorConsole.NAME,
                     operationTaskType: typeof(ConveyorTransferOperationTask).FullName!,
                     inputs: new object[] {
                         Input("OrderCode", nameof(ConveyorTransferOperationTask.OrderCode)),
                         Input("SourceLocationCode", nameof(ConveyorTransferOperationTask.FromLocationCode)),
-                        Input("RequestedTargetLocationCode", nameof(ConveyorTransferOperationTask.ToLocationCode))
+                        Input("InboundPortCode", nameof(ConveyorTransferOperationTask.ToLocationCode))
+                    },
+                    outputs: Array.Empty<object>()),
+                Operation(
+                    id: "OccupyInboundPort",
+                    consoleId: FunctionConsole.NAME,
+                    operationTaskType: typeof(OccupyInboundPortTask).FullName!,
+                    inputs: new object[] {
+                        Input("InboundPortId", nameof(OccupyInboundPortTask.InboundPortId))
                     },
                     outputs: Array.Empty<object>()),
                 Operation(
@@ -103,6 +127,7 @@ internal static class BackendDemoFlowSeeds {
                     operationTaskType: typeof(BindInboundLocationTask).FullName!,
                     inputs: new object[] {
                         Input("OrderCode", nameof(BindInboundLocationTask.OrderCode)),
+                        Input("InboundPortId", nameof(BindInboundLocationTask.InboundPortId)),
                         Input("SkuId", nameof(BindInboundLocationTask.SkuId)),
                         Input("SkuCode", nameof(BindInboundLocationTask.SkuCode)),
                         Input("TargetLocationId", nameof(BindInboundLocationTask.TargetLocationId)),
@@ -115,8 +140,10 @@ internal static class BackendDemoFlowSeeds {
                     })
             },
             routes = new object[] {
-                Path("Root", new[] { "ConveyorToInboundPort" }),
-                Path("ConveyorToInboundPort", new[] { "AcquireTargetLocation" }),
+                Path("Root", new[] { "AcquireInboundPort" }),
+                Path("AcquireInboundPort", new[] { "ConveyorToInboundPort" }),
+                Path("ConveyorToInboundPort", new[] { "OccupyInboundPort" }),
+                Path("OccupyInboundPort", new[] { "AcquireTargetLocation" }),
                 Path("AcquireTargetLocation", new[] { "ResolveTargetLocation" }),
                 Path("ResolveTargetLocation", new[] { "StackCraneMoveToRack" }),
                 Path("StackCraneMoveToRack", new[] { "BindLocationPallet" })

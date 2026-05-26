@@ -10,6 +10,9 @@ public sealed class BindInboundLocationTask : OperationTask<FunctionConsole> {
     public string OrderCode { get; set; } = string.Empty;
 
     [Input]
+    public int InboundPortId { get; set; }
+
+    [Input]
     public int SkuId { get; set; }
 
     [Input]
@@ -50,6 +53,10 @@ public sealed class BindInboundLocationTask : OperationTask<FunctionConsole> {
         await scopedManager.Service.UpdateAsync<int, Location>(TargetLocationId, entity => {
             entity.Status = LocationStatus.Occupied;
             entity.CurrentPalletId = pallet.Id;
+        });
+        await scopedManager.Service.UpdateAsync<int, Port>(InboundPortId, entity => {
+            entity.Status = PortStatus.Idle;
+            entity.CurrentPalletId = null;
         });
 
         InboundPalletId = pallet.Id;

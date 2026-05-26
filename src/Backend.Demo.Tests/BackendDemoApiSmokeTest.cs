@@ -368,7 +368,9 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
                 .Select(node => node.GetProperty("nodeId").GetString())
                 .Where(nodeId => !string.IsNullOrWhiteSpace(nodeId))
                 .ToArray();
+            Assert.Contains("AcquireInboundPort", nodeIds);
             Assert.Contains("ConveyorToInboundPort", nodeIds);
+            Assert.Contains("OccupyInboundPort", nodeIds);
             Assert.Contains("AcquireTargetLocation", nodeIds);
             Assert.Contains("StackCraneMoveToRack", nodeIds);
             Assert.Contains("BindLocationPallet", nodeIds);
@@ -377,6 +379,9 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var completedLocation = await WaitForLocationStateAsync(targetLocation.Id, acquired: false);
         Assert.Equal(LocationStatus.Occupied, completedLocation.Status);
         Assert.NotNull(completedLocation.CurrentPalletId);
+        var inboundPort = (await manager.GetAsync<int, Port>()).First(port => port.Code == "IN-PORT-01");
+        Assert.Equal(PortStatus.Idle, inboundPort.Status);
+        Assert.Null(inboundPort.CurrentPalletId);
         var pallet = await manager.GetByIdAsync<int, Pallet>(completedLocation.CurrentPalletId!.Value);
         Assert.NotNull(pallet);
         Assert.True(pallet!.Enabled);
@@ -647,8 +652,10 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonDocument> WaitForFlowTaskResourceAsync(long flowTaskId, int resourceId) {
+        string? lastPayload = null;
         for (var retry = 0; retry < 120; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            lastPayload = document.RootElement.GetRawText();
             if (document.RootElement.GetProperty("resourceDetails")
                 .EnumerateArray()
                 .Any(item => item.GetProperty("resourceId").GetString() == resourceId.ToString())) {
@@ -658,7 +665,23 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
             await Task.Delay(50);
         }
 
-        throw new Xunit.Sdk.XunitException($"Timed out waiting for flow {flowTaskId} to acquire resource {resourceId}.");
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<DbContext>();
+        var operationTaskRows = await dbContext.Set<OperationTaskDetail>()
+            .AsNoTracking()
+            .Where(item => item.ParentFlowTaskId == flowTaskId)
+            .OrderBy(item => item.Id)
+            .Select(item => new {
+                item.Id,
+                item.NodeId,
+                item.Status,
+                item.CustomProperties,
+                item.ErrorMessage
+            })
+            .ToListAsync();
+
+        throw new Xunit.Sdk.XunitException(
+            $"Timed out waiting for flow {flowTaskId} to acquire resource {resourceId}. Last payload: {lastPayload}. OperationTask rows: {JsonSerializer.Serialize(operationTaskRows)}");
     }
 
     private async Task<JsonDocument> GetFlowTaskDocumentAsync(long flowTaskId) {
