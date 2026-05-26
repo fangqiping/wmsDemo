@@ -410,11 +410,26 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         using (var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4)) {
             Assert.Equal(4, flowTaskDocument.RootElement.GetProperty("status").GetInt32());
+            var nodeIds = flowTaskDocument.RootElement.GetProperty("executableDetailModels")
+                .EnumerateArray()
+                .Select(node => node.GetProperty("nodeId").GetString())
+                .Where(nodeId => !string.IsNullOrWhiteSpace(nodeId))
+                .ToArray();
+            Assert.Contains("AcquireSourceLocation", nodeIds);
+            Assert.Contains("AcquireSourcePallet", nodeIds);
+            Assert.Contains("AcquireOutboundPort", nodeIds);
+            Assert.Contains("StackCraneMoveToOutboundPort", nodeIds);
+            Assert.Contains("BindOutboundPort", nodeIds);
+            Assert.Contains("ConveyorFromOutboundPort", nodeIds);
+            Assert.Contains("ReleaseOutboundPort", nodeIds);
         }
 
         var completedLocation = await WaitForLocationStateAsync(actualSourceLocation.Id, acquired: false);
         Assert.Equal(LocationStatus.Empty, completedLocation.Status);
         Assert.Null(completedLocation.CurrentPalletId);
+        var outboundPort = (await manager.GetAsync<int, Port>()).First(port => port.Code == "OUT-PORT-01");
+        Assert.Equal(PortStatus.Idle, outboundPort.Status);
+        Assert.Null(outboundPort.CurrentPalletId);
         var pallet = await WaitForPalletStateAsync(actualSourceLocation.CurrentPalletId!.Value, enabled: false, acquired: false);
         Assert.False(pallet.Enabled);
     }

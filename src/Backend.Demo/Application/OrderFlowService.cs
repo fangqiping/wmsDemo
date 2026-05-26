@@ -75,11 +75,17 @@ public sealed class OrderFlowService : IOrderFlowService {
             ?? throw new ArgumentException($"Sku-{firstLine.SkuId} not found.");
         var sourceLocation = await _manager.GetByIdAsync<int, Location>(firstLine.SourceLocationId)
             ?? throw new ArgumentException($"Location-{firstLine.SourceLocationId} not found.");
+        var outboundPort = (await _manager.GetAsync<int, Port>(
+            search: ports => ports.Where(entity => entity.Enabled && entity.PortType == PortType.Outbound)
+                .OrderBy(entity => entity.Id)))
+            .FirstOrDefault()
+            ?? throw new ArgumentException("No enabled outbound port is configured.");
 
         var (definition, version, flow) = await ResolveFlowAsync(BusinessFlowType.OutboundOrder, order.FlowDefinitionCode);
         var options = new ExecutionOptions.Builder(flow)
             .WithInput(order.Code, "OrderCode")
             .WithInput(sourceLocation.WarehouseId, "WarehouseId")
+            .WithInput(outboundPort.Code, "OutboundPortCode")
             .WithInput(sourceLocation.Code, "RequestedSourceLocationCode")
             .WithInput(sourceLocation.Code, "SourceLocationCode")
             .WithInput(sourceLocation.Id, "SourceLocationId")
