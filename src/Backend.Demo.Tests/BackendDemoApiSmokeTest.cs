@@ -363,6 +363,15 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         using (var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4)) {
             Assert.Equal(4, flowTaskDocument.RootElement.GetProperty("status").GetInt32());
+            var nodeIds = flowTaskDocument.RootElement.GetProperty("executableDetailModels")
+                .EnumerateArray()
+                .Select(node => node.GetProperty("nodeId").GetString())
+                .Where(nodeId => !string.IsNullOrWhiteSpace(nodeId))
+                .ToArray();
+            Assert.Contains("ConveyorToInboundPort", nodeIds);
+            Assert.Contains("AcquireTargetLocation", nodeIds);
+            Assert.Contains("StackCraneMoveToRack", nodeIds);
+            Assert.Contains("BindLocationPallet", nodeIds);
         }
 
         var completedLocation = await WaitForLocationStateAsync(targetLocation.Id, acquired: false);
@@ -371,6 +380,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var pallet = await manager.GetByIdAsync<int, Pallet>(completedLocation.CurrentPalletId!.Value);
         Assert.NotNull(pallet);
         Assert.True(pallet!.Enabled);
+        Assert.Equal("PLT-IN-RESOURCE-1001", pallet.Code);
     }
 
     [Fact]
@@ -418,6 +428,21 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         using var runningFlowDocument = await WaitForFlowTaskResourceAsync(flowTaskId, fallbackLocation.Id);
         Assert.Equal(3, runningFlowDocument.RootElement.GetProperty("status").GetInt32());
+    }
+
+    [Fact]
+    public async Task InboundFlow_PreservesRequestedLocationVariables_WhenFallbackOccurs() {
+        using var _ = UseObservableResourceOperationTaskDelays();
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-FALLBACK-1001", "RACK-A2");
+
+        using var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4);
+        var variables = ReadVariables(flowTaskDocument);
+
+        Assert.Equal("\"RACK-A2\"", variables["RequestedTargetLocationCode"]);
+        Assert.Equal("\"RACK-A1\"", variables["TargetLocationCode"]);
+        Assert.Equal("3", variables["RequestedTargetLocationId"]);
+        Assert.Equal("2", variables["TargetLocationId"]);
+        Assert.Equal("\"PLT-IN-FALLBACK-1001\"", variables["InboundPalletCode"]);
     }
 
     [Fact]
@@ -686,6 +711,15 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         throw new Xunit.Sdk.XunitException(
             $"Timed out waiting for flow {flowTaskId} status {expectedStatus}. Last payload: {lastPayload}. OperationTask rows: {JsonSerializer.Serialize(operationTaskRows)}");
+    }
+
+    private static Dictionary<string, string?> ReadVariables(JsonDocument document) {
+        return document.RootElement.GetProperty("variableEntities")
+            .EnumerateArray()
+            .Where(item => item.ValueKind != JsonValueKind.Null)
+            .ToDictionary(
+                item => item.GetProperty("id").GetString()!,
+                item => item.GetProperty("value").GetString());
     }
 
     private async Task<Location> WaitForLocationStateAsync(int locationId, bool acquired) {

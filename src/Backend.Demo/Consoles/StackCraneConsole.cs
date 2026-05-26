@@ -38,20 +38,13 @@ public sealed class StackCraneConsole : ConsoleBase {
         await scopedManager.Service.UpdateAsync<int, Location>(locationId, location => location.Status = status);
     }
 
-    public async Task<int> StoreAsync(int locationId, int skuId, string palletCode) {
+    public async Task MoveToRackAsync(int locationId) {
         using var scopedManager = _managerFactory.Create();
-        var pallet = await scopedManager.Service.AddAsync<int, Pallet>(new Pallet {
-            Code = palletCode,
-            Enabled = true,
-            Acquired = false,
-            SkuId = skuId,
-            Quantity = 1
-        });
-        await scopedManager.Service.UpdateAsync<int, Location>(locationId, location => {
-            location.Status = LocationStatus.Occupied;
-            location.CurrentPalletId = pallet.Id;
-        });
-        return pallet.Id;
+        var location = await scopedManager.Service.GetByIdAsync<int, Location>(locationId)
+            ?? throw new InvalidOperationException($"Location-{locationId} not found.");
+        if (!location.Enabled) {
+            throw new InvalidOperationException($"Location-{locationId} is disabled.");
+        }
     }
 
     public async Task RetrieveAsync(int locationId, int palletId) {

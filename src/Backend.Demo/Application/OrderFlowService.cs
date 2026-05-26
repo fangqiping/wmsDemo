@@ -38,6 +38,7 @@ public sealed class OrderFlowService : IOrderFlowService {
             .WithInput(order.Source, "SourceLocationCode")
             .WithInput(targetLocation.WarehouseId, "WarehouseId")
             .WithInput(targetLocation.Code, "RequestedTargetLocationCode")
+            .WithInput(targetLocation.Id, "RequestedTargetLocationId")
             .WithInput(targetLocation.Code, "TargetLocationCode")
             .WithInput(targetLocation.Id, "TargetLocationId")
             .WithInput(sku.Id, "SkuId")

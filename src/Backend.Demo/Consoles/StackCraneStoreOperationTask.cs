@@ -29,9 +29,7 @@ public sealed class StackCraneStoreOperationTask : OperationTask<StackCraneConso
 
     protected override async Task DoProcessAsync(StackCraneConsole console, CancellationToken cancellationToken) {
         await Task.Delay(DelayMilliseconds, cancellationToken);
-        await console.StoreAsync(TargetLocationId, SkuId, BuildPalletCode());
-        CompletionMessage = $"{OrderCode}: stack crane stored {SkuCode} to {TargetLocationCode}.";
+        await console.MoveToRackAsync(TargetLocationId);
+        CompletionMessage = $"{OrderCode}: stack crane moved {SkuCode} to {TargetLocationCode}.";
     }
-
-    private string BuildPalletCode() => $"PLT-{OrderCode}-{TargetLocationCode}";
 }
