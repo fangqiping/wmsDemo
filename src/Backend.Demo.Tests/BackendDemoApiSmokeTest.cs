@@ -349,6 +349,97 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
+    public async Task AcquireNodeCancel_ThroughHttp_ExposesRetryAndSkipActions() {
+        using var _ = UseExtendedOperationTaskDelays();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A2");
+        Assert.NotNull(sourceLocation.CurrentPalletId);
+        await manager.UpdateAsync<int, Pallet>(sourceLocation.CurrentPalletId!.Value, entity => entity.Acquired = true);
+
+        var flowTaskId = await CreateAndStartOutboundOrderAsync("OUT-ACQUIRE-CANCEL-1001", preferredLocationCode: "RACK-A2");
+        var acquireNode = await WaitForNodeActionAsync(flowTaskId, "AcquireSourcePallet", "cancel");
+
+        var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{acquireNode.GetProperty("id").GetInt64()}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+
+        var canceledNode = await WaitForExecutableActionAsync(flowTaskId, acquireNode.GetProperty("id").GetInt64(), "restart");
+        var actions = canceledNode.GetProperty("availableActions").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Contains("restart", actions);
+        Assert.Contains("skip", actions);
+    }
+
+    [Fact]
+    public async Task AcquireNodeRestart_ThroughHttp_CreatesReplacementAcquireNode() {
+        using var _ = UseExtendedOperationTaskDelays();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A2");
+        Assert.NotNull(sourceLocation.CurrentPalletId);
+        var sourcePalletId = sourceLocation.CurrentPalletId!.Value;
+        await manager.UpdateAsync<int, Pallet>(sourcePalletId, entity => entity.Acquired = true);
+
+        var flowTaskId = await CreateAndStartOutboundOrderAsync("OUT-ACQUIRE-RETRY-1001", preferredLocationCode: "RACK-A2");
+        var acquireNode = await WaitForNodeActionAsync(flowTaskId, "AcquireSourcePallet", "cancel");
+        var acquireNodeId = acquireNode.GetProperty("id").GetInt64();
+
+        var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{acquireNodeId}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+        await WaitForExecutableActionAsync(flowTaskId, acquireNodeId, "restart");
+
+        await manager.UpdateAsync<int, Pallet>(sourcePalletId, entity => entity.Acquired = false);
+
+        var restartResponse = await _client.PostAsync($"/api/OperationTask/Restart/{acquireNodeId}", null);
+        restartResponse.EnsureSuccessStatusCode();
+
+        using var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4);
+        var acquireNodes = flowTaskDocument.RootElement.GetProperty("executableDetailModels")
+            .EnumerateArray()
+            .Where(node => node.GetProperty("nodeId").GetString() == "AcquireSourcePallet")
+            .ToArray();
+        Assert.True(acquireNodes.Length >= 2);
+        Assert.Contains(acquireNodes, node => node.GetProperty("id").GetInt64() == acquireNodeId && node.GetProperty("acknowledged").GetBoolean());
+        Assert.Contains(acquireNodes, node => node.GetProperty("id").GetInt64() != acquireNodeId);
+    }
+
+    [Fact]
+    public async Task AcquireNodeSkip_ThroughHttp_AdvancesToSuccessorNode() {
+        using var _ = UseExtendedOperationTaskDelays();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var sourceLocation = (await manager.GetAsync<int, Location>()).First(location => location.Code == "RACK-A2");
+        Assert.NotNull(sourceLocation.CurrentPalletId);
+        var sourcePalletId = sourceLocation.CurrentPalletId!.Value;
+        await manager.UpdateAsync<int, Pallet>(sourcePalletId, entity => entity.Acquired = true);
+
+        var flowTaskId = await CreateAndStartOutboundOrderAsync("OUT-ACQUIRE-SKIP-1001", preferredLocationCode: "RACK-A2");
+        var acquireNode = await WaitForNodeActionAsync(flowTaskId, "AcquireSourcePallet", "cancel");
+        var acquireNodeId = acquireNode.GetProperty("id").GetInt64();
+
+        var cancelResponse = await _client.PostAsync($"/api/OperationTask/Cancel/{acquireNodeId}", null);
+        cancelResponse.EnsureSuccessStatusCode();
+        await WaitForExecutableActionAsync(flowTaskId, acquireNodeId, "skip");
+
+        await manager.UpdateAsync<int, Pallet>(sourcePalletId, entity => entity.Acquired = false);
+
+        var skipResponse = await _client.PostAsync($"/api/OperationTask/Skip/{acquireNodeId}", null);
+        skipResponse.EnsureSuccessStatusCode();
+
+        using var flowTaskDocument = await WaitForFlowTaskStatusAsync(flowTaskId, 4);
+        var acquireNodeAfterSkip = flowTaskDocument.RootElement.GetProperty("executableDetailModels")
+            .EnumerateArray()
+            .Single(node => node.GetProperty("id").GetInt64() == acquireNodeId);
+        Assert.True(acquireNodeAfterSkip.GetProperty("acknowledged").GetBoolean());
+        var nodeIds = flowTaskDocument.RootElement.GetProperty("executableDetailModels")
+            .EnumerateArray()
+            .Select(node => node.GetProperty("nodeId").GetString())
+            .Where(nodeId => !string.IsNullOrWhiteSpace(nodeId))
+            .ToArray();
+        Assert.Contains("AcquireOutboundPort", nodeIds);
+        Assert.Contains("ReleaseOutboundPort", nodeIds);
+    }
+
+    [Fact]
     public async Task InboundFlow_AcquiresTargetLocationDuringRun_AndReleasesItAsOccupiedWithBoundPallet() {
         using var _ = UseObservableResourceOperationTaskDelays();
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -649,6 +740,23 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
             .EnumerateArray()
             .Single(item => item.GetProperty("id").GetInt64() == executableId)
             .Clone();
+    }
+
+    private async Task<JsonElement> WaitForNodeActionAsync(long flowTaskId, string nodeId, string expectedAction) {
+        for (var retry = 0; retry < 120; retry++) {
+            using var document = await GetFlowTaskDocumentAsync(flowTaskId);
+            var node = document.RootElement.GetProperty("executableDetailModels")
+                .EnumerateArray()
+                .FirstOrDefault(item =>
+                    item.GetProperty("nodeId").GetString() == nodeId
+                    && item.GetProperty("availableActions").EnumerateArray().Any(action => action.GetString() == expectedAction));
+            if (node.ValueKind != JsonValueKind.Undefined) {
+                return node.Clone();
+            }
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException($"Timed out waiting for node '{nodeId}' in flow {flowTaskId} to expose action '{expectedAction}'.");
     }
 
     private async Task<JsonDocument> WaitForFlowTaskDocumentAsync(long flowTaskId, int rootStatus, int expectedExecutableCountAtLeast) {
