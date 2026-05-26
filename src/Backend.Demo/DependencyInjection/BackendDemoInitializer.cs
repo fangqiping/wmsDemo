@@ -103,6 +103,15 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
             Status = LocationStatus.Available,
             WarehouseId = warehouse.Id
         });
+        await _manager.AddAsync<int, Port>(new Port {
+            Code = "IN-PORT-01",
+            Name = "Inbound Port 01",
+            Enabled = true,
+            Acquired = false,
+            PortType = PortType.Inbound,
+            Status = PortStatus.Idle,
+            WarehouseId = warehouse.Id
+        });
         await _manager.AddAsync<int, Location>(new Location {
             Code = "RACK-A1",
             Name = "Rack A1",
@@ -146,6 +155,15 @@ public sealed class BackendDemoInitializer : IBackendDemoInitializer {
             Acquired = false,
             LocationType = LocationType.OutboundStation,
             Status = LocationStatus.Available,
+            WarehouseId = warehouse.Id
+        });
+        await _manager.AddAsync<int, Port>(new Port {
+            Code = "OUT-PORT-01",
+            Name = "Outbound Port 01",
+            Enabled = true,
+            Acquired = false,
+            PortType = PortType.Outbound,
+            Status = PortStatus.Idle,
             WarehouseId = warehouse.Id
         });
     }

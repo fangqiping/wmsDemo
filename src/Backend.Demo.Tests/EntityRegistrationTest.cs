@@ -18,6 +18,7 @@ public sealed class EntityRegistrationTest {
 
         scope.ServiceProvider.GetRequiredService<IManager<int, Warehouse>>();
         scope.ServiceProvider.GetRequiredService<IManager<int, Location>>();
+        scope.ServiceProvider.GetRequiredService<IManager<int, Port>>();
         scope.ServiceProvider.GetRequiredService<IManager<int, Pallet>>();
         scope.ServiceProvider.GetRequiredService<IManager<int, Sku>>();
         scope.ServiceProvider.GetRequiredService<IManager<int, InboundOrder>>();
