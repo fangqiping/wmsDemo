@@ -22,6 +22,9 @@ public sealed class StackCraneRetrieveOperationTask : OperationTask<StackCraneCo
     public int SourcePalletId { get; set; }
 
     [Input]
+    public string OutboundPortCode { get; set; } = string.Empty;
+
+    [Input]
     public int DelayMilliseconds { get; set; } = DefaultDelayMilliseconds;
 
     [Output]
@@ -30,6 +33,6 @@ public sealed class StackCraneRetrieveOperationTask : OperationTask<StackCraneCo
     protected override async Task DoProcessAsync(StackCraneConsole console, CancellationToken cancellationToken) {
         await Task.Delay(DelayMilliseconds, cancellationToken);
         await console.RetrieveAsync(SourceLocationId, SourcePalletId);
-        CompletionMessage = $"{OrderCode}: stack crane retrieved {SkuCode} from {SourceLocationCode}.";
+        CompletionMessage = $"{OrderCode}: stack crane moved {SkuCode} from {SourceLocationCode} to {OutboundPortCode}.";
     }
 }
