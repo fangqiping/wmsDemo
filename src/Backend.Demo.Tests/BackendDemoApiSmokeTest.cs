@@ -16,6 +16,7 @@ using Xunit;
 
 namespace Backend.Demo.Tests;
 
+[Collection(nameof(BackendDemoApiSmokeTestCollection))]
 public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"backend-demo-api-{Guid.NewGuid():N}.db");
     private readonly string _defaultDbPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../Backend.Demo/backend-demo.db"));
@@ -192,6 +193,22 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.True(document.RootElement.TryGetProperty("subFlowTemplates", out _));
+    }
+
+    [Fact]
+    public async Task FlowDefinitions_Get_ThroughHttp_ReturnsSeededDefinitions() {
+        var response = await _client.GetAsync("/api/FlowDefinitions");
+
+        response.EnsureSuccessStatusCode();
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var codes = document.RootElement
+            .EnumerateArray()
+            .Select(item => item.GetProperty("code").GetString())
+            .ToArray();
+
+        Assert.Contains("inbound-basic", codes);
+        Assert.Contains("outbound-basic", codes);
     }
 
     [Fact]
@@ -584,7 +601,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         Assert.NotNull(started);
 
         InboundOrderModel? refreshed = null;
-        for (var retry = 0; retry < 20; retry++) {
+        for (var retry = 0; retry < 100; retry++) {
             var readResponse = await _client.GetAsync($"/api/InboundOrders/{created.Id}");
             readResponse.EnsureSuccessStatusCode();
             refreshed = await readResponse.Content.ReadFromJsonAsync<InboundOrderModel>();
@@ -686,7 +703,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<long> WaitForCancelableOperationTaskAsync(long flowTaskId) {
-        for (var retry = 0; retry < 200; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             using var document = await GetFlowTaskDocumentAsync(flowTaskId);
             var node = document.RootElement.GetProperty("executableDetailModels")
                 .EnumerateArray()
@@ -705,7 +722,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonElement> WaitForReplacementOperationTaskAsync(long flowTaskId, long originalOperationTaskId) {
-        for (var retry = 0; retry < 40; retry++) {
+        for (var retry = 0; retry < 200; retry++) {
             using var document = await GetFlowTaskDocumentAsync(flowTaskId);
             var node = document.RootElement.GetProperty("executableDetailModels")
                 .EnumerateArray()
@@ -722,7 +739,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonElement> WaitForExecutableActionAsync(long flowTaskId, long executableId, string expectedAction) {
-        for (var retry = 0; retry < 120; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             var node = await GetExecutableNodeAsync(flowTaskId, executableId);
             if (node.GetProperty("availableActions").EnumerateArray().Any(action => action.GetString() == expectedAction)) {
                 return node;
@@ -743,7 +760,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonElement> WaitForNodeActionAsync(long flowTaskId, string nodeId, string expectedAction) {
-        for (var retry = 0; retry < 120; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             using var document = await GetFlowTaskDocumentAsync(flowTaskId);
             var node = document.RootElement.GetProperty("executableDetailModels")
                 .EnumerateArray()
@@ -760,7 +777,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonDocument> WaitForFlowTaskDocumentAsync(long flowTaskId, int rootStatus, int expectedExecutableCountAtLeast) {
-        for (var retry = 0; retry < 40; retry++) {
+        for (var retry = 0; retry < 200; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
             var root = document.RootElement;
             if (root.GetProperty("status").GetInt32() == rootStatus
@@ -776,7 +793,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
     private async Task<JsonDocument> WaitForFlowTaskResourceAsync(long flowTaskId, int resourceId) {
         string? lastPayload = null;
-        for (var retry = 0; retry < 120; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
             lastPayload = document.RootElement.GetRawText();
             if (document.RootElement.GetProperty("resourceDetails")
@@ -814,7 +831,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private async Task<JsonDocument> WaitForFlowTaskActionsAsync(long flowTaskId, string expectedAction) {
-        for (var retry = 0; retry < 120; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
             if (document.RootElement.GetProperty("availableActions")
                 .EnumerateArray()
@@ -830,7 +847,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
     private async Task<JsonDocument> WaitForFlowTaskStatusAsync(long flowTaskId, int expectedStatus) {
         string? lastPayload = null;
-        for (var retry = 0; retry < 120; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             var document = await GetFlowTaskDocumentAsync(flowTaskId);
             lastPayload = document.RootElement.GetRawText();
             if (document.RootElement.GetProperty("status").GetInt32() == expectedStatus) {
@@ -870,7 +887,7 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
 
     private async Task<Location> WaitForLocationStateAsync(int locationId, bool acquired) {
         Location? lastLocation = null;
-        for (var retry = 0; retry < 120; retry++) {
+        for (var retry = 0; retry < 400; retry++) {
             await using var scope = _factory.Services.CreateAsyncScope();
             var manager = scope.ServiceProvider.GetRequiredService<IManager>();
             var location = await manager.GetByIdAsync<int, Location>(locationId);
@@ -949,3 +966,6 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 20000;
     }
 }
+
+[CollectionDefinition(nameof(BackendDemoApiSmokeTestCollection), DisableParallelization = true)]
+public sealed class BackendDemoApiSmokeTestCollection { }

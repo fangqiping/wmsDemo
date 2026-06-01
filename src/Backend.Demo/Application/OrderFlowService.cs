@@ -4,6 +4,7 @@ using FlowEngine.Data;
 using FlowEngine.Execution;
 using FlowEngine.Execution.Design;
 using FlowEngine.Execution.FlowEngine;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.Demo.Application;
@@ -52,7 +53,7 @@ public sealed class OrderFlowService : IOrderFlowService {
             .Build();
 
         var flowTask = await _flowScheduler.ScheduleAsync(flow, options);
-        order = await _manager.UpdateAsync<int, InboundOrder>(order.Id, entity => {
+        order = await UpdateWithTransientRetryAsync<int, InboundOrder>(order.Id, entity => {
             entity.FlowDefinitionCode = definition.Id;
             entity.FlowVersionNumber = version.VersionNumber;
             entity.FlowTaskId = flowTask.Id;
@@ -95,7 +96,7 @@ public sealed class OrderFlowService : IOrderFlowService {
             .Build();
 
         var flowTask = await _flowScheduler.ScheduleAsync(flow, options);
-        order = await _manager.UpdateAsync<int, OutboundOrder>(order.Id, entity => {
+        order = await UpdateWithTransientRetryAsync<int, OutboundOrder>(order.Id, entity => {
             entity.FlowDefinitionCode = definition.Id;
             entity.FlowVersionNumber = version.VersionNumber;
             entity.FlowTaskId = flowTask.Id;
@@ -104,6 +105,33 @@ public sealed class OrderFlowService : IOrderFlowService {
         });
         order = await SyncTerminalOutboundOrderStatusAsync(order);
         return order;
+    }
+
+    private async Task<TEntity> UpdateWithTransientRetryAsync<TKey, TEntity>(
+            TKey id,
+            Action<TEntity> updateAction)
+            where TKey : notnull, IEquatable<TKey>
+            where TEntity : class, FlowEngine.Data.IEntity<TKey> {
+        const int maxAttempts = 20;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return await _manager.UpdateAsync(id, updateAction);
+            } catch (InvalidOperationException ex) when (IsTransientSqliteUpdate(ex) && attempt < maxAttempts) {
+                await Task.Delay(25 * attempt);
+            }
+        }
+
+        return await _manager.UpdateAsync(id, updateAction);
+    }
+
+    private static bool IsTransientSqliteUpdate(Exception exception) {
+        for (var current = exception; current != null; current = current.InnerException) {
+            if (current is SqliteException { SqliteErrorCode: 5 }) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<InboundOrder> SyncTerminalInboundOrderStatusAsync(InboundOrder order) {
