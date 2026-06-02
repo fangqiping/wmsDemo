@@ -211,6 +211,16 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
+    public async Task NotificationHub_Negotiate_ThroughHttp_Succeeds() {
+        var response = await _client.PostAsync("/hubs/notifications/negotiate?negotiateVersion=1", null);
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(document.RootElement.TryGetProperty("connectionId", out _));
+        Assert.True(document.RootElement.TryGetProperty("availableTransports", out _));
+    }
+
+    [Fact]
     public async Task FlowDefinitions_Get_ThroughHttp_ReturnsSeededDefinitions() {
         var response = await _client.GetAsync("/api/FlowDefinitions");
 

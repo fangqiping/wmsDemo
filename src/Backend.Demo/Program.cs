@@ -2,6 +2,7 @@ using System.Globalization;
 using Backend.Demo.DependencyInjection;
 using Microsoft.AspNetCore.Localization;
 using FlowEngine.Server.Authorization.Permissions;
+using FlowEngine.Server.Notifications;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +15,7 @@ var corsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>
     ];
 
 builder.Services.AddBackendDemoApplication(connectionString);
+builder.Services.AddNotificationRealtime();
 builder.Services.AddAuthorization(options => {
     options.AddPolicy(PermissionsConstants.PolicyName, policy => {
         policy.RequireAssertion(_ => true);
@@ -23,7 +25,8 @@ builder.Services.AddCors(options => {
     options.AddPolicy("FlowView", policy => {
         policy.WithOrigins(corsOrigins)
             .AllowAnyHeader()
-            .AllowAnyMethod();
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
 var supportedCultures = new[] {
@@ -49,6 +52,7 @@ app.UseAuthorization();
 app.UseSwagger();
 app.UseSwaggerUI();
 app.MapControllers();
+app.MapNotificationHub();
 
 app.Run();
 
