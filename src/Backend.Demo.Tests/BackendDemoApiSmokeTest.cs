@@ -195,6 +195,21 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         Assert.True(document.RootElement.TryGetProperty("subFlowTemplates", out _));
     }
 
+    [Theory]
+    [InlineData("zh-Hans-CN")]
+    [InlineData("en-US")]
+    [InlineData("fr-FR")]
+    public async Task FlowCatalog_Get_WithAcceptLanguage_Succeeds(string language) {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/FlowCatalog");
+        request.Headers.AcceptLanguage.ParseAdd(language);
+
+        var response = await _client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(document.RootElement.TryGetProperty("operations", out _));
+    }
+
     [Fact]
     public async Task FlowDefinitions_Get_ThroughHttp_ReturnsSeededDefinitions() {
         var response = await _client.GetAsync("/api/FlowDefinitions");

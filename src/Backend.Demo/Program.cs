@@ -1,4 +1,6 @@
+using System.Globalization;
 using Backend.Demo.DependencyInjection;
+using Microsoft.AspNetCore.Localization;
 using FlowEngine.Server.Authorization.Permissions;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -24,10 +26,21 @@ builder.Services.AddCors(options => {
             .AllowAnyMethod();
     });
 });
+var supportedCultures = new[] {
+    new CultureInfo("en-US"),
+    new CultureInfo("zh-Hans-CN"),
+};
+builder.Services.Configure<RequestLocalizationOptions>(options => {
+    options.DefaultRequestCulture = new RequestCulture("en-US");
+    options.SupportedCultures = supportedCultures;
+    options.SupportedUICultures = supportedCultures;
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+app.UseRequestLocalization();
 
 await app.Services.InitializeBackendDemoAsync();
 
