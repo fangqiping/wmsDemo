@@ -8,6 +8,7 @@ using Backend.Demo.Domain;
 using FlowEngine.Data;
 using FlowEngine.Data.EntityFramework.Storage;
 using FlowEngine.Execution;
+using FlowEngine.Execution.Consoles;
 using FlowEngine.Execution.Design;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +20,31 @@ namespace Backend.Demo.Tests;
 public sealed class BackendDemoInitializationTest : IDisposable {
     private const string InboundFlowCode = "inbound-basic";
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"backend-demo-{Guid.NewGuid():N}.db");
+
+    [Fact]
+    public void AddBackendDemoApplication_RegistersResourceOperationTemplates() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication($"Data Source={_dbPath}");
+
+        using var provider = services.BuildServiceProvider(true);
+        var catalog = provider.GetRequiredService<IFlowDesignCatalog>();
+        var operations = catalog.Operations.ToDictionary(operation => operation.Key);
+
+        Assert.Contains("resource-acquire-inbound-port", operations.Keys);
+        Assert.Contains("resource-acquire-outbound-port", operations.Keys);
+        Assert.Contains("resource-acquire-empty-rack", operations.Keys);
+        Assert.Contains("resource-acquire-occupied-rack", operations.Keys);
+        Assert.Contains("resource-load-location-snapshot", operations.Keys);
+        Assert.Contains("resource-bind-inbound-location", operations.Keys);
+        Assert.Contains("resource-bind-outbound-port", operations.Keys);
+        Assert.Contains("resource-occupy-inbound-port", operations.Keys);
+        Assert.Contains("resource-release-outbound-port", operations.Keys);
+        Assert.All(operations.Where(operation => operation.Key.StartsWith("resource-", StringComparison.Ordinal)),
+            operation => Assert.Equal(FunctionConsole.NAME, operation.Value.Category));
+        Assert.Contains(operations["resource-acquire-inbound-port"].Inputs, input => input.Name == "WarehouseId");
+        Assert.Contains(operations["resource-bind-inbound-location"].Outputs, output => output.Name == "InboundPalletCode");
+    }
 
     [Fact]
     public async Task InitializeAsync_SeedsMasterDataConsolesAndPublishedFlows() {
