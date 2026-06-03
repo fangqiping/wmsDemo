@@ -174,6 +174,37 @@ public sealed class BackendDemoInitializationTest : IDisposable {
     }
 
     [Fact]
+    public async Task InitializeAsync_SeedsDemoFlowDraftsWithEstimatedDurations() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication($"Data Source={_dbPath}");
+
+        await using var provider = services.BuildServiceProvider(true);
+        await using var scope = provider.CreateAsyncScope();
+
+        var initializer = scope.ServiceProvider.GetRequiredService<IBackendDemoInitializer>();
+        await initializer.InitializeAsync();
+
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var drafts = (await manager.GetAsync<string, FlowDraft>(
+                query => query.Where(draft => draft.Id == InboundFlowCode || draft.Id == "outbound-basic")
+                    .OrderBy(draft => draft.Id)))
+            .ToArray();
+
+        Assert.Equal(2, drafts.Length);
+        Assert.All(drafts, draft => {
+            using var document = JsonDocument.Parse(draft.DraftDocumentJson);
+            var nodes = document.RootElement.GetProperty("nodes").EnumerateArray()
+                .ToArray();
+
+            Assert.NotEmpty(nodes);
+            Assert.All(nodes, node => Assert.True(
+                node.GetProperty("estimatedDurationMilliseconds").GetInt64() > 0,
+                $"{draft.Id}/{node.GetProperty("id").GetString()} should declare estimatedDurationMilliseconds."));
+        });
+    }
+
+    [Fact]
     public async Task InitializeAsync_RepublishesDemoFlows_WhenSeedDraftChanges() {
         var services = new ServiceCollection();
         services.AddLogging();
