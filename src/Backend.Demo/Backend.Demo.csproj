@@ -6,9 +6,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="FlowEngine" Version="0.1.0-preview.8" />
-    <PackageReference Include="FlowEngine.Execution" Version="0.1.0-preview.8" />
-    <PackageReference Include="FlowEngine.Server" Version="0.1.0-preview.8" />
+    <PackageReference Include="FlowEngine" Version="0.1.0-preview.9" />
+    <PackageReference Include="FlowEngine.Execution" Version="0.1.0-preview.9" />
+    <PackageReference Include="FlowEngine.Server" Version="0.1.0-preview.9" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.8">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
