@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Net.Http.Headers;
 using Backend.Demo.Contracts.Orders;
@@ -8,6 +9,7 @@ using FlowEngine.Data;
 using FlowEngine.Execution;
 using FlowEngine.Execution.Consoles;
 using FlowEngine.Execution.FlowEngine;
+using FlowEngine.Execution.Scheduling;
 using FlowEngine.Server.WebApi;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -599,6 +601,34 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     [Fact]
+    public async Task SchedulePlansReplan_ThroughHttp_ProducesCurrentPlanForRunningFixedNode() {
+        using var _ = UseOperationTaskDelays(5000);
+        var schedulingOptions = _factory.Services.GetRequiredService<GlobalSchedulingOptions>();
+        schedulingOptions.Enabled = true;
+        schedulingOptions.Debounce = TimeSpan.Zero;
+        var flowTaskId = await CreateAndStartInboundOrderAsync("IN-SCHEDULE-1001");
+
+        await WaitForNodeActionAsync(flowTaskId, "ConveyorToInboundPort", "cancel");
+
+        var replanResponse = await _client.PostAsync("/api/SchedulePlans/replan", null);
+        Assert.Equal(HttpStatusCode.Accepted, replanResponse.StatusCode);
+
+        using var planDocument = await WaitForCurrentSchedulePlanAsync(plan =>
+            ContainsPlanItem(plan, flowTaskId, "ConveyorToInboundPort", ConveyorConsole.NAME));
+        var items = planDocument.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Contains(items, item =>
+            item.GetProperty("nodeId").GetString() == "ConveyorToInboundPort"
+            && item.GetProperty("flowTaskId").GetInt64() == flowTaskId
+            && item.GetProperty("displayLabel").GetString()?.Contains("入库输送", StringComparison.Ordinal) == true);
+        Assert.Contains(items, item =>
+            item.GetProperty("nodeId").GetString() == "ConveyorToInboundPort"
+            && item.GetProperty("flowTaskId").GetInt64() == flowTaskId
+            && item.GetProperty("resourceId").GetString() == ConveyorConsole.NAME);
+        Assert.True(
+            planDocument.RootElement.GetProperty("latestSolveAttempt").GetProperty("candidateCount").GetInt32() > 0);
+    }
+
+    [Fact]
     public async Task InboundOrderStartFlow_EventuallyMarksOrderCompleted_WhenTaskFinishesQuickly() {
         await using var scope = _factory.Services.CreateAsyncScope();
         var manager = scope.ServiceProvider.GetRequiredService<IManager>();
@@ -642,12 +672,16 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
     }
 
     private IDisposable UseExtendedOperationTaskDelays() {
+        return UseOperationTaskDelays(2000);
+    }
+
+    private IDisposable UseOperationTaskDelays(int delayMilliseconds) {
         var originalConveyorDelay = ConveyorTransferOperationTask.DefaultDelayMilliseconds;
         var originalStoreDelay = StackCraneStoreOperationTask.DefaultDelayMilliseconds;
         var originalRetrieveDelay = StackCraneRetrieveOperationTask.DefaultDelayMilliseconds;
-        ConveyorTransferOperationTask.DefaultDelayMilliseconds = 2000;
-        StackCraneStoreOperationTask.DefaultDelayMilliseconds = 2000;
-        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = 2000;
+        ConveyorTransferOperationTask.DefaultDelayMilliseconds = delayMilliseconds;
+        StackCraneStoreOperationTask.DefaultDelayMilliseconds = delayMilliseconds;
+        StackCraneRetrieveOperationTask.DefaultDelayMilliseconds = delayMilliseconds;
         return new CallbackDisposable(() => {
             ConveyorTransferOperationTask.DefaultDelayMilliseconds = originalConveyorDelay;
             StackCraneStoreOperationTask.DefaultDelayMilliseconds = originalStoreDelay;
@@ -853,6 +887,46 @@ public sealed class BackendDemoApiSmokeTest : IAsyncLifetime {
         var response = await _client.GetAsync($"/api/FlowTask/{flowTaskId}");
         response.EnsureSuccessStatusCode();
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+    }
+
+    private async Task<JsonDocument> WaitForCurrentSchedulePlanAsync(Func<JsonElement, bool> predicate) {
+        string? lastPayload = null;
+        HttpStatusCode? lastStatus = null;
+        for (var retry = 0; retry < 200; retry++) {
+            var response = await _client.GetAsync("/api/SchedulePlans/current");
+            lastStatus = response.StatusCode;
+            if (response.StatusCode == HttpStatusCode.NotFound) {
+                await Task.Delay(50);
+                continue;
+            }
+
+            response.EnsureSuccessStatusCode();
+            lastPayload = await response.Content.ReadAsStringAsync();
+            var document = JsonDocument.Parse(lastPayload);
+            if (predicate(document.RootElement)) {
+                return document;
+            }
+            document.Dispose();
+            await Task.Delay(50);
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"Timed out waiting for current schedule plan. Last status: {lastStatus}. Last payload: {lastPayload}");
+    }
+
+    private static bool ContainsPlanItem(
+        JsonElement plan,
+        long flowTaskId,
+        string nodeId,
+        string resourceId) {
+        var items = plan.GetProperty("items").EnumerateArray().ToArray();
+        return items.Any(item =>
+                item.GetProperty("nodeId").GetString() == nodeId
+                && item.GetProperty("flowTaskId").GetInt64() == flowTaskId)
+            && items.Any(item =>
+                item.GetProperty("nodeId").GetString() == nodeId
+                && item.GetProperty("flowTaskId").GetInt64() == flowTaskId
+                && item.GetProperty("resourceId").GetString() == resourceId);
     }
 
     private async Task<JsonDocument> WaitForFlowTaskActionsAsync(long flowTaskId, string expectedAction) {
