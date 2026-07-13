@@ -97,7 +97,8 @@ public sealed class BackendDemoScheduleCandidateProvider : IScheduleCandidatePro
                 inboundOrders,
                 outboundOrders,
                 variablesByFlowTaskId,
-                resourcesByFlowTaskId);
+                resourcesByFlowTaskId,
+                occurrence);
             candidates.Add(new ScheduleCandidate(
                 execution,
                 display.Label,
@@ -128,7 +129,8 @@ public sealed class BackendDemoScheduleCandidateProvider : IScheduleCandidatePro
             && MatchesKey(item, key)
             && item.ResourceType == occupancy.ResourceType
             && item.ResourceId == occupancy.ResourceId
-            && item.ActualEnd == null);
+            && item.ActualEnd == null
+            && !IsClosed(item));
     }
 
     private static bool MatchesKey(SchedulePlanItem item, ScheduleTaskKey key) {
@@ -150,7 +152,8 @@ public sealed class BackendDemoScheduleCandidateProvider : IScheduleCandidatePro
         IReadOnlyDictionary<long, InboundOrder> inboundOrders,
         IReadOnlyDictionary<long, OutboundOrder> outboundOrders,
         IReadOnlyDictionary<long, List<VariableEntity>> variablesByFlowTaskId,
-        IReadOnlyDictionary<long, List<ResourceDetail>> resourcesByFlowTaskId) {
+        IReadOnlyDictionary<long, List<ResourceDetail>> resourcesByFlowTaskId,
+        int occurrence) {
         var variableEntities = ResolveVariables(flowTask, variablesByFlowTaskId);
         var resourceDetails = ResolveResources(flowTask, resourcesByFlowTaskId);
         var variables = variableEntities.ToDictionary(
@@ -165,7 +168,7 @@ public sealed class BackendDemoScheduleCandidateProvider : IScheduleCandidatePro
                 ?? ResolveSkuCode(reader, line?.SkuId);
             var pallet = variables.GetValueOrDefault("InboundPalletCode")
                 ?? (!string.IsNullOrWhiteSpace(inboundOrder.Code) ? $"PLT-{inboundOrder.Code}" : null);
-            var targetLocation = ResolveAcquiredLocationCode(reader, resourceDetails, "AcquireTargetLocation")
+            var targetLocation = ResolveAcquiredLocationCode(reader, resourceDetails, "AcquireTargetLocation", occurrence)
                 ?? variables.GetValueOrDefault("TargetLocationCode")
                 ?? line?.TargetLocation?.Code
                 ?? ResolveLocationCode(reader, line?.TargetLocationId);
@@ -194,7 +197,7 @@ public sealed class BackendDemoScheduleCandidateProvider : IScheduleCandidatePro
                 ?? ResolveSkuCode(reader, line?.SkuId);
             var sourcePalletId = ReadVariableInt(variableEntities, "SourcePalletId");
             var pallet = ResolvePalletCode(reader, sourcePalletId);
-            var sourceLocation = ResolveAcquiredLocationCode(reader, resourceDetails, "AcquireSourceLocation");
+            var sourceLocation = ResolveAcquiredLocationCode(reader, resourceDetails, "AcquireSourceLocation", occurrence);
             var requestedSourceLocation = variables.GetValueOrDefault("RequestedSourceLocationCode")
                 ?? line?.SourceLocation?.Code
                 ?? ResolveLocationCode(reader, line?.SourceLocationId);
@@ -337,10 +340,12 @@ public sealed class BackendDemoScheduleCandidateProvider : IScheduleCandidatePro
     private static string? ResolveAcquiredLocationCode(
         IReader reader,
         IEnumerable<ResourceDetail> resourceDetails,
-        string acquireNodeId) {
+        string acquireNodeId,
+        int occurrence) {
         var resourceDetail = resourceDetails
             .Where(resource => resource.NodeId == acquireNodeId)
             .Where(resource => resource.ResourceType == typeof(Location).FullName)
+            .Where(resource => resource.ScheduleOccurrence.GetValueOrDefault(1) == occurrence)
             .OrderByDescending(resource => resource.AcquiredAt)
             .FirstOrDefault();
         if (resourceDetail == null || !int.TryParse(resourceDetail.ResourceId, out var locationId)) {

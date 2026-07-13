@@ -126,6 +126,36 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
     }
 
     [Fact]
+    public async Task GetCandidatesAsync_DoesNotSkipCandidate_WhenMatchingOccupancyIsTerminalEvenWithoutActualEnd() {
+        var reader = new InMemoryReader(FlowTask(351, "inbound-runtime"));
+        reader.AddRange(Operation(3511, 351, "ConveyorToInboundPort"));
+        reader.AddRange(FlowVersion("inbound-runtime", Node("ConveyorToInboundPort", 45_000)));
+        var terminalOccupancy = PlanItem(
+            ScheduleItemKind.ResourceOccupancy,
+            351,
+            "ConveyorToInboundPort",
+            resourceType: typeof(ConsoleInfo).FullName!,
+            resourceId: ConveyorConsole.NAME,
+            actualEnd: null,
+            status: SchedulePlanItemStatus.Running);
+        var context = Context(
+            PlanItem(
+                ScheduleItemKind.NodeExecution,
+                351,
+                "ConveyorToInboundPort",
+                resourceType: null,
+                resourceId: null,
+                actualEnd: DateTimeOffset.Parse("2026-07-13T00:01:00Z"),
+                status: SchedulePlanItemStatus.Completed),
+            terminalOccupancy);
+        SetReadOnlyProperty(terminalOccupancy, "Status", SchedulePlanItemStatus.Completed);
+
+        var candidate = Assert.Single(await GetCandidatesAsync(reader, context));
+
+        Assert.Equal("ConveyorToInboundPort", candidate.Execution.NodeId);
+    }
+
+    [Fact]
     public async Task GetCandidatesAsync_ReadsVariablesAndResources_WhenFlowTaskNavigationsAreNotLoaded() {
         var actualSource = new Location { Id = 22, Code = "RACK-Z2" };
         var requestedSource = new Location { Id = 21, Code = "RACK-Z1" };
@@ -173,6 +203,59 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         Assert.Equal("RACK-Z2", context.RootElement.GetProperty("sourceLocation").GetString());
         Assert.Equal("RACK-Z1", context.RootElement.GetProperty("requestedSourceLocation").GetString());
         Assert.Equal("SHIP-Z", context.RootElement.GetProperty("targetLocation").GetString());
+    }
+
+    [Fact]
+    public async Task GetCandidatesAsync_UsesAcquiredResourceMatchingOperationOccurrence() {
+        var firstOccurrenceSource = new Location { Id = 31, Code = "RACK-OCC-1" };
+        var secondOccurrenceSource = new Location { Id = 32, Code = "RACK-OCC-2" };
+        var requestedSource = new Location { Id = 33, Code = "RACK-REQUESTED" };
+        var sku = new Sku { Id = 88, Code = "SKU-OCC" };
+        var reader = new InMemoryReader(FlowTask(461, "outbound-runtime"));
+        reader.AddRange(Operation(4601, 461, "StackCraneMoveToOutboundPort", scheduleOccurrence: 2));
+        reader.AddRange(FlowVersion("outbound-runtime", Node("StackCraneMoveToOutboundPort", 120_000)));
+        reader.AddRange(
+            Variable(461, "OrderCode", "\"OUT-4601\""),
+            Variable(461, "RequestedSourceLocationCode", "\"RACK-REQUESTED\""),
+            Variable(461, "TargetLocationCode", "\"SHIP-OCC\""),
+            Variable(461, "SkuCode", "\"SKU-OCC\""));
+        reader.AddRange(
+            new ResourceDetail {
+                FlowTaskId = 461,
+                NodeId = "AcquireSourceLocation",
+                ScheduleOccurrence = 1,
+                ResourceType = typeof(Location).FullName!,
+                ResourceId = firstOccurrenceSource.Id.ToString()
+            },
+            new ResourceDetail {
+                FlowTaskId = 461,
+                NodeId = "AcquireSourceLocation",
+                ScheduleOccurrence = 2,
+                ResourceType = typeof(Location).FullName!,
+                ResourceId = secondOccurrenceSource.Id.ToString()
+            });
+        reader.AddRange(new OutboundOrder {
+            Id = 46,
+            Code = "OUT-4601",
+            Destination = "SHIP-OCC",
+            FlowTaskId = 461,
+            Lines = {
+                new OutboundOrderLine {
+                    SkuId = sku.Id,
+                    Sku = sku,
+                    SourceLocationId = requestedSource.Id,
+                    SourceLocation = requestedSource
+                }
+            }
+        });
+        reader.AddRange(firstOccurrenceSource, secondOccurrenceSource, requestedSource);
+
+        var candidate = Assert.Single(await GetCandidatesAsync(reader));
+
+        Assert.Equal(2, candidate.Execution.Occurrence);
+        using var context = JsonDocument.Parse(candidate.DisplayContextJson!);
+        Assert.Equal("RACK-OCC-2", context.RootElement.GetProperty("sourceLocation").GetString());
+        Assert.Equal("RACK-REQUESTED", context.RootElement.GetProperty("requestedSourceLocation").GetString());
     }
 
     [Fact]
@@ -327,12 +410,14 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         long id,
         long parentFlowTaskId,
         string nodeId,
-        string? consoleId = null) {
+        string? consoleId = null,
+        int? scheduleOccurrence = null) {
         return new OperationTaskDetail {
             Id = id,
             ParentFlowTaskId = parentFlowTaskId,
             NodeId = nodeId,
             ConsoleId = consoleId ?? FunctionConsole.NAME,
+            ScheduleOccurrence = scheduleOccurrence,
             Status = ExecutableStatus.Scheduled
         };
     }
