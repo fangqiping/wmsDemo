@@ -26,16 +26,21 @@ public sealed class PortResourceRulesTest : IDisposable {
         var console = ActivatorUtilities.CreateInstance<FunctionConsole>(scope.ServiceProvider);
         await resourceManagerProvider.StartAsync(CancellationToken.None);
         await console.StartAsync(CancellationToken.None);
-        var task = new AcquireInboundPortTask {
-            Console = console,
-            Status = ExecutableStatus.Scheduled,
-            WarehouseId = 1
-        };
+        try {
+            var task = new AcquireInboundPortTask {
+                Console = console,
+                Status = ExecutableStatus.Scheduled,
+                WarehouseId = 1
+            };
 
-        await task.ExecuteAsync();
+            await task.ExecuteAsync();
 
-        Assert.Equal("IN-PORT-01", task.InboundPortCode);
-        Assert.True(task.InboundPortId > 0);
+            Assert.Equal("IN-PORT-01", task.InboundPortCode);
+            Assert.True(task.InboundPortId > 0);
+        } finally {
+            await console.StopAsync(CancellationToken.None);
+            await resourceManagerProvider.StopAsync(CancellationToken.None);
+        }
     }
 
     public void Dispose() {
