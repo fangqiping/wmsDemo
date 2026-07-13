@@ -10,6 +10,7 @@ using FlowEngine.Data.EntityFramework.Storage;
 using FlowEngine.Execution;
 using FlowEngine.Execution.Consoles;
 using FlowEngine.Execution.Design;
+using FlowEngine.Execution.Scheduling;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -105,6 +106,45 @@ public sealed class BackendDemoInitializationTest : IDisposable {
 
         var result = (long)(await command.ExecuteScalarAsync() ?? 0L);
         Assert.Equal(1L, result);
+    }
+
+    [Fact]
+    public void AddBackendDemoApplication_RegistersSchedulingEntitiesInEfModel() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication($"Data Source={_dbPath}");
+
+        using var provider = services.BuildServiceProvider(true);
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<DbContext>();
+
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SchedulePlanHead)));
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SchedulePlan)));
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(SchedulePlanItem)));
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(RuntimeScheduleFeedback)));
+        Assert.NotNull(dbContext.Model.FindEntityType(typeof(ScheduleSolveAttempt)));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_IsIdempotentAgainstSqliteMigrationsAndSeedData() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication($"Data Source={_dbPath}");
+
+        await using var provider = services.BuildServiceProvider(true);
+        await using var scope = provider.CreateAsyncScope();
+
+        var initializer = scope.ServiceProvider.GetRequiredService<IBackendDemoInitializer>();
+        await initializer.InitializeAsync();
+
+        var manager = scope.ServiceProvider.GetRequiredService<IManager>();
+        var firstCounts = await GetSeedCountsAsync(manager);
+
+        await initializer.InitializeAsync();
+
+        var secondCounts = await GetSeedCountsAsync(manager);
+        Assert.Equal(firstCounts, secondCounts);
     }
 
     [Fact]
@@ -251,5 +291,17 @@ public sealed class BackendDemoInitializationTest : IDisposable {
         if (File.Exists(_dbPath)) {
             File.Delete(_dbPath);
         }
+    }
+
+    private static async Task<(int Warehouses, int Locations, int Ports, int Pallets, int Skus, int FlowBindings, int FlowDefinitions, int FlowVersions)> GetSeedCountsAsync(IManager manager) {
+        return (
+            await manager.CountAsync<int, Warehouse>(),
+            await manager.CountAsync<int, Location>(),
+            await manager.CountAsync<int, Port>(),
+            await manager.CountAsync<int, Pallet>(),
+            await manager.CountAsync<int, Sku>(),
+            await manager.CountAsync<int, FlowBinding>(),
+            await manager.CountAsync<string, FlowDefinition>(),
+            await manager.CountAsync<long, FlowVersion>());
     }
 }
