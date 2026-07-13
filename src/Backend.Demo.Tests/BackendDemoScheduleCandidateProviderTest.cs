@@ -9,6 +9,7 @@ using FlowEngine.Execution.Design;
 using FlowEngine.Execution.FlowEngine;
 using FlowEngine.Execution.Scheduling;
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
 using Xunit;
 
 namespace Backend.Demo.Tests;
@@ -30,8 +31,7 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         reader.AddRange(InboundOrder(11, 101, "IN-1001", "PLT-IN-1001", "SKU-A", "RACK-A1"));
         reader.AddRange(OutboundOrder(21, 102, "OUT-2001", "SKU-B", "RACK-B1", "SHIP-DOCK"));
 
-        var candidates = await new BackendDemoScheduleCandidateProvider(reader)
-            .GetCandidatesAsync(Context(), CancellationToken.None);
+        var candidates = await GetCandidatesAsync(reader);
 
         Assert.Equal(4, candidates.Count);
         AssertCandidate(candidates.Single(candidate => candidate.Execution.NodeId == "ConveyorFromOutboundPort"),
@@ -60,8 +60,7 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         reader.AddRange(Operation(2001, 201, "ConveyorToInboundPort"));
         reader.AddRange(FlowVersion("inbound-runtime", NodeWithoutDuration("ConveyorToInboundPort")));
 
-        var candidate = Assert.Single(await new BackendDemoScheduleCandidateProvider(reader)
-            .GetCandidatesAsync(Context(), CancellationToken.None));
+        var candidate = Assert.Single(await GetCandidatesAsync(reader));
 
         Assert.Equal(TimeSpan.FromSeconds(1), candidate.Execution.ExpectedDuration);
         Assert.Equal(TimeSpan.FromSeconds(1), Assert.Single(candidate.Execution.Occupancies).ExpectedDuration);
@@ -87,8 +86,7 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
             Node("CustomConveyorHold", 60_000),
             Node("ConveyorToInboundPort", 45_000)));
 
-        var candidate = Assert.Single(await new BackendDemoScheduleCandidateProvider(reader)
-            .GetCandidatesAsync(Context(), CancellationToken.None));
+        var candidate = Assert.Single(await GetCandidatesAsync(reader));
 
         Assert.Equal("ConveyorToInboundPort", candidate.Execution.NodeId);
         Assert.All(candidate.Execution.Occupancies, occupancy => {
@@ -100,25 +98,102 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
     }
 
     [Fact]
+    public async Task GetCandidatesAsync_SkipsCandidate_WhenCurrentPlanHasOpenFixedConsoleOccupancyAfterNodeClosed() {
+        var reader = new InMemoryReader(FlowTask(350, "inbound-runtime"));
+        reader.AddRange(Operation(3501, 350, "ConveyorToInboundPort"));
+        reader.AddRange(FlowVersion("inbound-runtime", Node("ConveyorToInboundPort", 45_000)));
+        var context = Context(
+            PlanItem(
+                ScheduleItemKind.NodeExecution,
+                350,
+                "ConveyorToInboundPort",
+                resourceType: null,
+                resourceId: null,
+                actualEnd: DateTimeOffset.Parse("2026-07-13T00:01:00Z"),
+                status: SchedulePlanItemStatus.Completed),
+            PlanItem(
+                ScheduleItemKind.ResourceOccupancy,
+                350,
+                "ConveyorToInboundPort",
+                resourceType: typeof(ConsoleInfo).FullName!,
+                resourceId: ConveyorConsole.NAME,
+                actualEnd: null,
+                status: SchedulePlanItemStatus.Running));
+
+        var candidates = await GetCandidatesAsync(reader, context);
+
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
+    public async Task GetCandidatesAsync_ReadsVariablesAndResources_WhenFlowTaskNavigationsAreNotLoaded() {
+        var actualSource = new Location { Id = 22, Code = "RACK-Z2" };
+        var requestedSource = new Location { Id = 21, Code = "RACK-Z1" };
+        var sku = new Sku { Id = 77, Code = "SKU-Z" };
+        var pallet = new Pallet { Id = 501, Code = "PLT-OUT-501", SkuId = sku.Id };
+        var reader = new InMemoryReader(FlowTask(451, "outbound-runtime"));
+        reader.AddRange(Operation(4501, 451, "StackCraneMoveToOutboundPort"));
+        reader.AddRange(FlowVersion("outbound-runtime", Node("StackCraneMoveToOutboundPort", 120_000)));
+        reader.AddRange(
+            Variable(451, "OrderCode", "\"OUT-4501\""),
+            Variable(451, "RequestedSourceLocationCode", "\"RACK-Z1\""),
+            Variable(451, "TargetLocationCode", "\"SHIP-Z\""),
+            Variable(451, "SourcePalletId", "501"),
+            Variable(451, "SkuCode", "\"SKU-Z\""));
+        reader.AddRange(new ResourceDetail {
+            FlowTaskId = 451,
+            NodeId = "AcquireSourceLocation",
+            ResourceType = typeof(Location).FullName!,
+            ResourceId = actualSource.Id.ToString()
+        });
+        reader.AddRange(new OutboundOrder {
+            Id = 41,
+            Code = "OUT-4501",
+            Destination = "SHIP-Z",
+            FlowTaskId = 451,
+            Lines = {
+                new OutboundOrderLine {
+                    SkuId = sku.Id,
+                    Sku = sku,
+                    SourceLocationId = requestedSource.Id,
+                    SourceLocation = requestedSource
+                }
+            }
+        });
+        reader.AddRange(actualSource, requestedSource);
+        reader.AddRange(sku);
+        reader.AddRange(pallet);
+
+        var candidate = Assert.Single(await GetCandidatesAsync(reader));
+
+        Assert.Equal("OUT-4501 / PLT-OUT-501 · 下架", candidate.DisplayLabel);
+        using var context = JsonDocument.Parse(candidate.DisplayContextJson!);
+        Assert.Equal("SKU-Z", context.RootElement.GetProperty("sku").GetString());
+        Assert.Equal("PLT-OUT-501", context.RootElement.GetProperty("pallet").GetString());
+        Assert.Equal("RACK-Z2", context.RootElement.GetProperty("sourceLocation").GetString());
+        Assert.Equal("RACK-Z1", context.RootElement.GetProperty("requestedSourceLocation").GetString());
+        Assert.Equal("SHIP-Z", context.RootElement.GetProperty("targetLocation").GetString());
+    }
+
+    [Fact]
     public async Task GetCandidatesAsync_UsesActualAcquiredSourceLocation_ForOutboundFallbackContext() {
         var actualSource = new Location { Id = 2, Code = "RACK-A2" };
         var requestedSource = new Location { Id = 1, Code = "RACK-A1" };
         var sku = new Sku { Id = 7, Code = "SKU-B" };
-        var reader = new InMemoryReader(FlowTask(
-            401,
-            "outbound-runtime",
-            new ResourceDetail {
-                FlowTaskId = 401,
-                NodeId = "AcquireSourceLocation",
-                ResourceType = typeof(Location).FullName!,
-                ResourceId = actualSource.Id.ToString()
-            },
-            "OrderCode", "\"OUT-2002\"",
-            "RequestedSourceLocationCode", "\"RACK-A1\"",
-            "TargetLocationCode", "\"SHIP-DOCK\"",
-            "SkuCode", "\"SKU-B\""));
+        var reader = new InMemoryReader(FlowTask(401, "outbound-runtime"));
         reader.AddRange(Operation(4001, 401, "StackCraneMoveToOutboundPort"));
         reader.AddRange(FlowVersion("outbound-runtime", Node("StackCraneMoveToOutboundPort", 120_000)));
+        reader.AddRange(
+            Variable(401, "OrderCode", "\"OUT-2002\""),
+            Variable(401, "RequestedSourceLocationCode", "\"RACK-A1\""),
+            Variable(401, "TargetLocationCode", "\"SHIP-DOCK\""),
+            Variable(401, "SkuCode", "\"SKU-B\""));
+        reader.AddRange(new ResourceDetail {
+            FlowTaskId = 401,
+            NodeId = "AcquireSourceLocation",
+            ResourceType = typeof(Location).FullName!,
+            ResourceId = actualSource.Id.ToString()
+        });
         reader.AddRange(new OutboundOrder {
             Id = 31,
             Code = "OUT-2002",
@@ -135,8 +210,7 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         });
         reader.AddRange(actualSource, requestedSource);
 
-        var candidate = Assert.Single(await new BackendDemoScheduleCandidateProvider(reader)
-            .GetCandidatesAsync(Context(), CancellationToken.None));
+        var candidate = Assert.Single(await GetCandidatesAsync(reader));
 
         using var context = JsonDocument.Parse(candidate.DisplayContextJson!);
         Assert.Equal("RACK-A2", context.RootElement.GetProperty("sourceLocation").GetString());
@@ -154,6 +228,18 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
             descriptor.ServiceType == typeof(IScheduleCandidateProvider) &&
             descriptor.ImplementationType == typeof(BackendDemoScheduleCandidateProvider) &&
             descriptor.Lifetime == ServiceLifetime.Singleton);
+    }
+
+    [Fact]
+    public void AddBackendDemoApplication_ResolvesScheduleCandidateProvider_WithScopeValidationEnabled() {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddBackendDemoApplication("Data Source=:memory:");
+
+        using var provider = services.BuildServiceProvider(validateScopes: true);
+
+        var providers = provider.GetServices<IScheduleCandidateProvider>();
+        Assert.Contains(providers, candidateProvider => candidateProvider is BackendDemoScheduleCandidateProvider);
     }
 
     private static void AssertCandidate(
@@ -175,7 +261,18 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         Assert.Equal(duration, occupancy.ExpectedDuration);
     }
 
-    private static ScheduleCandidateContext Context() {
+    private static async Task<IReadOnlyList<ScheduleCandidate>> GetCandidatesAsync(
+        IReader reader,
+        ScheduleCandidateContext? context = null) {
+        using var serviceProvider = new ServiceCollection()
+            .AddScoped(_ => reader)
+            .BuildServiceProvider(validateScopes: true);
+        var provider = new BackendDemoScheduleCandidateProvider(
+            serviceProvider.GetRequiredService<IServiceScopeFactory>());
+        return await provider.GetCandidatesAsync(context ?? Context(), CancellationToken.None);
+    }
+
+    private static ScheduleCandidateContext Context(params SchedulePlanItem[] items) {
         var now = DateTimeOffset.Parse("2026-07-13T00:00:00Z");
         var plan = new SchedulePlan(
             version: 1,
@@ -185,9 +282,45 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
             trigger: ScheduleTrigger.Initial,
             triggerDetail: "test",
             createdAt: now,
-            items: Array.Empty<SchedulePlanItem>(),
+            items: items,
             makespan: null);
         return new ScheduleCandidateContext(now, now.AddHours(8), plan, now);
+    }
+
+    private static SchedulePlanItem PlanItem(
+        ScheduleItemKind itemKind,
+        long flowTaskId,
+        string nodeId,
+        string? resourceType,
+        string? resourceId,
+        DateTimeOffset? actualEnd,
+        SchedulePlanItemStatus status,
+        int occurrence = 1) {
+        var now = DateTimeOffset.Parse("2026-07-13T00:00:00Z");
+        var item = new SchedulePlanItem(
+            itemKind,
+            flowTaskId,
+            nodeId,
+            occurrence,
+            now,
+            now.AddSeconds(45),
+            TimeSpan.FromSeconds(45),
+            "test",
+            resourceType: resourceType,
+            resourceId: resourceId,
+            occupancyIndex: itemKind == ScheduleItemKind.ResourceOccupancy ? 0 : null);
+        if (actualEnd.HasValue) {
+            SetReadOnlyProperty(item, "ActualStart", now);
+        }
+        SetReadOnlyProperty(item, "ActualEnd", actualEnd);
+        SetReadOnlyProperty(item, "Status", status);
+        return item;
+    }
+
+    private static void SetReadOnlyProperty<TValue>(SchedulePlanItem item, string propertyName, TValue value) {
+        var field = typeof(SchedulePlanItem).GetField($"<{propertyName}>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"{propertyName} backing field was not found.");
+        field.SetValue(item, value);
     }
 
     private static OperationTaskDetail Operation(
@@ -229,6 +362,14 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
         }
         detail.ResourceDetails.AddRange(resources);
         return detail;
+    }
+
+    private static VariableEntity Variable(long flowTaskId, string id, string value) {
+        return new VariableEntity {
+            FlowTaskId = flowTaskId,
+            Id = id,
+            Value = value
+        };
     }
 
     private static InboundOrder InboundOrder(int id, long flowTaskId, string code, string pallet, string skuCode, string targetLocationCode) {
@@ -307,6 +448,20 @@ public sealed class BackendDemoScheduleCandidateProviderTest {
                 _entities[typeof(TEntity)] = list;
             }
             list.AddRange(entities.Cast<object>());
+            foreach (var variable in entities.OfType<VariableEntity>()) {
+                AttachVariable(variable);
+            }
+        }
+
+        private void AttachVariable(VariableEntity variable) {
+            if (!_entities.TryGetValue(typeof(FlowTaskDetail), out var flowTasks)) {
+                return;
+            }
+            var flowTask = flowTasks.Cast<FlowTaskDetail>()
+                .FirstOrDefault(task => task.Id == variable.FlowTaskId);
+            if (flowTask?.VariableEntities != null) {
+                flowTask.VariableEntities.Add(variable);
+            }
         }
     }
 }
