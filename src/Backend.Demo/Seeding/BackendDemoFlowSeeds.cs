@@ -291,6 +291,7 @@ internal static class BackendDemoFlowSeeds {
         id,
         nodeType = "Operation",
         description = id,
+        estimatedDurationMilliseconds = GetEstimatedDurationMilliseconds(id),
         shouldThrowOnFailed = false,
         shouldThrowOnCanceled = false,
         inputs,
@@ -299,6 +300,21 @@ internal static class BackendDemoFlowSeeds {
         consoleId,
         operationTaskType
     };
+
+    private static long GetEstimatedDurationMilliseconds(string nodeId) {
+        return nodeId switch {
+            "ConveyorToInboundPort" or "ConveyorFromOutboundPort" => 45_000,
+            "StackCraneMoveToRack" or "StackCraneMoveToOutboundPort" => 120_000,
+            "AcquireInboundPort" or "AcquireTargetLocation" or "AcquireSourceLocation" or "AcquireOutboundPort" => 30_000,
+            "ResolveTargetLocation" or "ResolveSourceLocation" => 10_000,
+            "OccupyInboundPort"
+                or "BindLocationPallet"
+                or "AcquireSourcePallet"
+                or "BindOutboundPort"
+                or "ReleaseOutboundPort" => 15_000,
+            _ => 20_000
+        };
+    }
 
     private static object Input(string source, string destination) => new {
         source,

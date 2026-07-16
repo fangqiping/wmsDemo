@@ -7,9 +7,11 @@ using FlowEngine.Server.DependencyInjection;
 using FlowEngine.Server.Execution;
 using Backend.Demo.Application;
 using Backend.Demo.Resource;
+using Backend.Demo.Scheduling;
 using Backend.Demo.Watchers;
 using FlowEngine.Data.DependencyInjection;
 using FlowEngine.Data.EntityFramework.Storage.DependencyInjection;
+using FlowEngine.Execution.Scheduling;
 using FlowEngine.Utils.DependencyInjection;
 
 namespace Backend.Demo.DependencyInjection;
@@ -37,6 +39,7 @@ public static class BackendDemoApplicationServiceCollectionExtensions {
         services.AddBackendDemoOperationTemplates();
         services.AddApiControllers(typeof(BackendDemoApplicationServiceCollectionExtensions).Assembly);
         services.AddExecutionControllers();
+        services.AddSingleton<IScheduleCandidateProvider, BackendDemoScheduleCandidateProvider>();
         services.AddSingletonHostedService<OrderStatusReconciliationService>();
         services.AddScoped<IOrderFlowService, OrderFlowService>();
         services.AddScoped<IBackendDemoInitializer, BackendDemoInitializer>();

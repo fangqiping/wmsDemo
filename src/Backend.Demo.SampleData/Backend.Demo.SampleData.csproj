@@ -6,8 +6,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="FlowEngine" Version="0.1.0-preview.6" />
-    <PackageReference Include="FlowEngine.Execution" Version="0.1.0-preview.6" />
+    <PackageReference Include="FlowEngine" Version="0.1.0-preview.10" />
+    <PackageReference Include="FlowEngine.Execution" Version="0.1.0-preview.10" />
   </ItemGroup>
 
   <ItemGroup>

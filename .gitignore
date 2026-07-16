@@ -1,6 +1,12 @@
 .DS_Store
 .worktrees/
-.nupkg/
+.nupkg/*
+!.nupkg/flowengine/
+.nupkg/flowengine/*
+!.nupkg/flowengine/FlowEngine.0.1.0-preview.10.nupkg
+!.nupkg/flowengine/FlowEngine.Execution.0.1.0-preview.10.nupkg
+!.nupkg/flowengine/FlowEngine.Execution.Equipment.0.1.0-preview.10.nupkg
+!.nupkg/flowengine/FlowEngine.Server.0.1.0-preview.10.nupkg
 bin/
 obj/
 *.db
